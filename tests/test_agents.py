@@ -10,6 +10,7 @@ import pytest
 from clausegraph.agents import guardrails
 from clausegraph.agents.amount import compute
 from clausegraph.agents.amount_rules import RULES, find_rule
+from clausegraph.agents.exclusion import _quote
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
 from clausegraph.agents.models import Adjudication, Decision, Evidence
@@ -88,6 +89,35 @@ def test_impossible_date_is_dropped_not_guessed() -> None:
     claim = extract_claim("C3", PRODUCT, ENROLLED, "2026.02.31 사고가 있었습니다.")
 
     assert claim.incident_on is None
+
+
+# --- 근거 인용 ---
+
+# 실제 항목이다. 뒤에 조문 상호참조가 붙어 있고, 앞머리에 면책의 주어가 있다.
+_ITEM_WITH_CROSS_REFERENCE = (
+    "산재보험에서 보상받는 의료비. 다만, 본인부담의료비(산재보험 요양급여 "
+    "산정기준에 따라 발생한 실제 본인 부담의료비)는 제3조(보장종목별 보상내용) "
+    "(2)질병급여 제1항 및 제3항부터 제8항에 따라 보상합니다."
+)
+
+
+def test_quote_keeps_the_subject_of_the_exclusion() -> None:
+    # 한때 앞머리를 `^.*?제\d+조\([^)]*\)\s*`로 떼려 했는데, 본문 안의 조문
+    # 참조를 제목으로 오인해 그 앞을 다 지웠다. 그러면 부지급의 근거로
+    # "...에 따라 보상합니다"만 남는다 - 정반대를 인용하는 것이다(notes/020).
+    quote = _quote(_ITEM_WITH_CROSS_REFERENCE)
+
+    assert quote.startswith("산재보험에서 보상받는 의료비")
+    assert not quote.startswith("(2)질병급여")
+    assert not quote.startswith("에 따라")
+
+
+def test_quote_is_not_a_fragment() -> None:
+    # 인용문이 조사로 시작하면 문장 조각이다. 근거로 쓸 수 없다.
+    for text in (_ITEM_WITH_CROSS_REFERENCE, "비만(E66)", "정신 및 행동장애(F04∼F99)"):
+        quote = _quote(text)
+        assert not quote.startswith(("에 ", "을 ", "를 ", "은 ", "는 ", "의 "))
+        assert len(quote) >= min(len(text.strip()), 7)
 
 
 # --- 금액산정 ---

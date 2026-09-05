@@ -64,8 +64,6 @@ def clear_caches() -> None:
     _EXCLUSION_CACHE.clear()
     _TOKEN_CACHE.clear()
     _distinctive_tokens_for.cache_clear()
-# 조항 앞머리의 상품·조문 이름은 표현 일치에서 빼야 한다 — 아무 청구에나 걸린다.
-_PREFIX_RE = re.compile(r"^.*?제\d+조\([^)]*\)\s*")
 _TOKEN_RE = re.compile(r"[가-힣]{2,}")
 
 
@@ -166,13 +164,28 @@ def _distinctive_tokens(driver: Driver, version: str) -> frozenset[str]:
 
 
 def _quote(text: str) -> str:
-    return _PREFIX_RE.sub("", text).strip()[:QUOTE_CHARS]
+    r"""근거로 보여 줄 인용문.
+
+    **여기서 앞머리를 잘라 내지 않는다.** 한때 `^.*?제\d+조\([^)]*\)\s*`로
+    조문 제목을 떼려 했는데, 조문도 호도 제목으로 시작하지 않는다(파서가
+    이미 뗀다). 그래서 이 정규식이 실제로 지운 것은 **본문 안의 조문
+    참조**와 그 앞의 모든 글자였다.
+
+        원문 산재보험에서 보상받는 의료비. 다만, 본인부담의료비(…)는
+             제3조(보장종목별 보상내용) (2)질병급여 제1항 … 에 따라 보상합니다.
+        인용 "(2)질병급여 제1항 및 제3항부터 제8항에 따라 보상합니다."
+
+    면책 항목 1,446개 중 116개(8.0%)가 이렇게 잘렸고, 최악은 11자
+    "에 따라 보상합니다."였다. **부지급의 근거로 "보상합니다"를 인용한
+    것이다.** 인용문이 이 시스템의 산출물인데 그 산출물이 정반대를 말했다
+    (notes/020).
+    """
+    return text.strip()[:QUOTE_CHARS]
 
 
 def _distinctive_overlap(clause: str, haystack: str, distinctive: frozenset[str]) -> str | None:
     """가장 긴 것부터 본다 — 긴 낱말일수록 우연히 겹칠 일이 적다."""
-    body = _PREFIX_RE.sub("", clause)
-    tokens = sorted(set(_TOKEN_RE.findall(body)), key=len, reverse=True)
+    tokens = sorted(set(_TOKEN_RE.findall(clause)), key=len, reverse=True)
     for token in tokens:
         if len(token) < MIN_KEYWORD_LEN or token not in distinctive:
             continue
