@@ -20,6 +20,7 @@ from neo4j import Driver
 from ..observability import REGISTRY
 from . import amount as amount_agent
 from . import guardrails
+from .amount_rules import find_rule
 from .coverage import find_coverage, resolve_version
 from .exclusion import screen
 from .models import Adjudication, Claim, Decision, Evidence, StepResult
@@ -54,17 +55,17 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
             (), None, steps, amount_computed=False, uncertain=False, masked=masked,
         )
 
-    coverage, step = _timed(
+    coverage_evidence, step = _timed(
         "보장탐색:조항", lambda: find_coverage(driver, claim.product, version)
     )
     steps.append(
         step(
-            ok=bool(coverage),
-            summary=f"보장 조항 {len(coverage)}개",
-            evidence=coverage[:MAX_EVIDENCE],
+            ok=bool(coverage_evidence),
+            summary=f"보장 조항 {len(coverage_evidence)}개",
+            evidence=coverage_evidence[:MAX_EVIDENCE],
         )
     )
-    if not coverage:
+    if not coverage_evidence:
         # 가입 시점에 그 상품이 없던 경우가 대부분이다 — 실손 특별약관1/2는
         # 2026-05-06에 생겼다. 거절이 맞는 동작이고, 왜 거절했는지 센다.
         REGISTRY.increment("needs_docs:그 시점에 상품 없음")
@@ -97,14 +98,33 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
             amount_computed=True, uncertain=False, masked=masked,
         )
 
+    # 불확실 면책이 가리키는 보장종목이 있으면 그 종목의 파라미터를 쓴다.
+    coverage = next(
+        (hit.evidence.node_uid.split("#")[1] for hit in uncertain if "#" in hit.evidence.node_uid),
+        None,
+    )
+    rule = find_rule(claim.product, coverage, claim.diagnosis_codes)
     computed, step = _timed(
         "금액산정",
-        lambda: amount_agent.compute(claim.claimed_amount, _days_since(claim)),
+        lambda: amount_agent.compute(
+            claim.claimed_amount,
+            _days_since(claim),
+            rule=rule,
+            inpatient=claim.hospital_days > 0,
+        ),
     )
-    steps.append(step(ok=computed.computed, summary=computed.basis))
+    steps.append(
+        step(
+            ok=computed.computed,
+            summary=computed.basis,
+            detail={"rule": f"{claim.product}/{coverage or '미지정'}"},
+        )
+    )
 
-    decision = Decision.PARTIAL if computed.value < claim.claimed_amount else Decision.PAID
-    evidence = (*coverage[:2], *(hit.evidence for hit in uncertain[:2]))
+    decision = (
+        Decision.PARTIAL if computed.value < claim.claimed_amount else Decision.PAID
+    )
+    evidence = (*coverage_evidence[:2], *(hit.evidence for hit in uncertain[:2]))
     return _finalize(
         claim, decision, computed.basis, evidence, version, steps,
         amount_computed=computed.computed, uncertain=bool(uncertain),

@@ -8,6 +8,7 @@ import pytest
 
 from clausegraph.agents import guardrails
 from clausegraph.agents.amount import REDUCTION_PERIOD_DAYS, compute
+from clausegraph.agents.amount_rules import RULES, find_rule
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
 from clausegraph.agents.models import Adjudication, Decision, Evidence
@@ -91,24 +92,99 @@ def test_impossible_date_is_dropped_not_guessed() -> None:
 # --- 금액산정 ---
 
 
-def test_reduction_period_halves_the_amount() -> None:
+def _complete_rule():
+    return next(rule for rule in RULES if rule.complete_for_outpatient())
+
+
+def test_parameters_are_required_before_any_amount_is_stated() -> None:
+    # 약관 파라미터가 없으면 계산했다고 말하지 않는다.
     result = compute(1_000_000, days_since_enrollment=30)
-
-    assert result.computed is True
-    assert result.value == 500_000
-
-
-def test_after_reduction_period_pays_in_full() -> None:
-    result = compute(1_000_000, days_since_enrollment=REDUCTION_PERIOD_DAYS)
-
-    assert result.value == 1_000_000
-
-
-def test_missing_incident_date_is_not_computed() -> None:
-    result = compute(1_000_000, days_since_enrollment=None)
 
     assert result.computed is False
     assert result.value == 0
+
+
+def test_incomplete_rule_is_not_guessed() -> None:
+    incomplete = next(rule for rule in RULES if not rule.complete_for_inpatient())
+
+    result = compute(1_000_000, days_since_enrollment=800, rule=incomplete)
+
+    assert result.computed is False
+    assert result.source_articles == incomplete.source_articles
+
+
+def test_inpatient_applies_only_the_rate() -> None:
+    rule = _complete_rule()
+
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=True
+    )
+
+    assert result.computed is True
+    assert result.value == int(1_000_000 * rule.reimburse_rate)
+
+
+def test_outpatient_subtracts_the_larger_deductible_first() -> None:
+    # "정액 또는 의료비의 N% 중 큰 금액"을 뺀 뒤 비율을 곱한다.
+    rule = _complete_rule()
+    claimed = 1_000_000
+    deductible = max(rule.outpatient_deductible, int(claimed * rule.outpatient_deductible_rate))
+
+    result = compute(claimed, days_since_enrollment=800, rule=rule, inpatient=False)
+
+    assert result.value == int((claimed - deductible) * rule.reimburse_rate)
+
+
+def test_reduction_period_is_applied_after_the_rate() -> None:
+    rule = _complete_rule()
+
+    early = compute(1_000_000, days_since_enrollment=30, rule=rule)
+    late = compute(1_000_000, days_since_enrollment=REDUCTION_PERIOD_DAYS, rule=rule)
+
+    assert early.value == int(late.value * 0.5)
+
+
+def test_annual_limit_caps_the_payout() -> None:
+    rule = _complete_rule()
+
+    result = compute(
+        1_000_000_000, days_since_enrollment=800, rule=rule, inpatient=True
+    )
+
+    assert result.value == rule.annual_limit
+
+
+def test_already_paid_reduces_the_remaining_limit() -> None:
+    rule = _complete_rule()
+    spent = rule.annual_limit - 100_000
+
+    result = compute(
+        1_000_000_000,
+        days_since_enrollment=800,
+        rule=rule,
+        inpatient=True,
+        already_paid_this_year=spent,
+    )
+
+    assert result.value == 100_000
+
+
+def test_missing_incident_date_is_not_computed() -> None:
+    result = compute(1_000_000, days_since_enrollment=None, rule=_complete_rule())
+
+    assert result.computed is False
+
+
+def test_computed_amount_cites_its_clauses() -> None:
+    rule = _complete_rule()
+
+    result = compute(1_000_000, days_since_enrollment=800, rule=rule)
+
+    assert result.source_articles == rule.source_articles
+
+
+def test_unknown_product_has_no_rule() -> None:
+    assert find_rule("존재하지 않는 상품", "(1)상해급여") is None
 
 
 # --- 가드레일 ---
@@ -185,3 +261,44 @@ def test_text_without_pii_is_untouched() -> None:
     text = "2026.8.10 우울증으로 통원치료를 받았습니다."
 
     assert guardrails.mask_pii(text) == (text, False)
+
+
+# --- 보장종목 판별 ---
+
+
+def test_injury_chapter_selects_the_injury_coverage() -> None:
+    from clausegraph.agents.amount_rules import classify_coverage
+
+    # KCD S·T는 손상·중독이다.
+    assert classify_coverage(("S82",)) == "상해"
+    assert classify_coverage(("T20",)) == "상해"
+
+
+def test_other_chapters_are_treated_as_disease() -> None:
+    from clausegraph.agents.amount_rules import classify_coverage
+
+    assert classify_coverage(("J18",)) == "질병"
+    assert classify_coverage(("K29", "E66")) == "질병"
+
+
+def test_no_code_means_the_coverage_is_unknown() -> None:
+    from clausegraph.agents.amount_rules import classify_coverage
+
+    # 모르면 모른다고 해야 한다 — 파라미터를 잘못 고르면 지급액이 틀린다.
+    assert classify_coverage(()) is None
+
+
+def test_rule_is_chosen_by_diagnosis_when_coverage_is_unstated() -> None:
+    from clausegraph.agents.amount_rules import find_rule
+
+    injury = find_rule("기본형 실손의료보험(급여 실손의료비)", None, ("S82",))
+    disease = find_rule("기본형 실손의료보험(급여 실손의료비)", None, ("J18",))
+
+    assert injury is not None and "상해" in injury.coverage
+    assert disease is not None and "질병" in disease.coverage
+
+
+def test_ambiguous_product_without_codes_yields_no_rule() -> None:
+    from clausegraph.agents.amount_rules import find_rule
+
+    assert find_rule("기본형 실손의료보험(급여 실손의료비)", None, ()) is None
