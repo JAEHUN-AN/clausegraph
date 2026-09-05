@@ -14,7 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-graph = ["neo4j>=5.23"]
+graph = [
+    "neo4j>=5.23",
+]
 rag = [
     "pgvector>=0.3",
     "psycopg[binary]>=3.2",
