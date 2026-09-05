@@ -17,6 +17,7 @@ from pathlib import Path
 from neo4j import GraphDatabase
 
 from ..law.parse_cli import parse_file
+from ..law.table_parser import Lexicon
 from .loader import apply_schema, link_history, load_version
 from .queries import COUNTS
 from .schema import OPEN_ENDED
@@ -43,7 +44,8 @@ def run(data_dir: Path) -> int:
         apply_schema(driver)
         print(f"적재 대상 {len(versions)}개 버전\n")
 
-        totals = {"articles": 0, "items": 0, "exclusions": 0}
+        lexicon = Lexicon.from_terms_dir(data_dir / TERMS_DIRNAME)
+        totals = {"articles": 0, "items": 0, "exclusions": 0, "table_items": 0}
         for version in versions:
             doc = parse_file(data_dir / TERMS_DIRNAME / version["file"])
             result = load_version(
@@ -52,14 +54,17 @@ def run(data_dir: Path) -> int:
                 effective_to=version["effective_to"],
                 sha=version["content_sha256"],
                 admrul_seqs=version["admrul_seqs"],
+                lexicon=lexicon,
             )
             totals["articles"] += result.articles
             totals["items"] += result.items
             totals["exclusions"] += result.exclusions
+            totals["table_items"] += result.table_items
             end = version["effective_to"] or "현재"
             print(
                 f"  {version['effective_from']} ~ {end}  "
-                f"조문 {result.articles:4d}  호 {result.items:4d}  면책 {result.exclusions:2d}"
+                f"조문 {result.articles:4d}  호 {result.items:4d}  면책 {result.exclusions:2d}  "
+                f"표 사유 {result.table_items:3d}(보장종목 {result.coverages:2d})"
             )
 
         link_history(driver)

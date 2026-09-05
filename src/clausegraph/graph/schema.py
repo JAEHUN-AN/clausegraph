@@ -5,6 +5,9 @@
     (:Version {effective_from, effective_to, sha})
       <-[:IN_VERSION]- (:Article)
     (:Article)-[:HAS_ITEM]->(:Item)      호 — 면책 사유가 열거되는 단위
+    (:Article)-[:HAS_COVERAGE]->(:Coverage)-[:EXCLUDES]->(:Item)
+        실손 계열은 면책을 보장종목별 표로 적는다. 같은 조문 안에서도
+        상해급여와 질병급여의 사유가 다르므로 보장종목을 노드로 둔다.
     (:Article)-[:SUPERSEDES]->(:Article) 같은 상품·같은 번호의 이전 버전
     (:Version)-[:SUPERSEDES]->(:Version)
 
@@ -30,6 +33,8 @@ CONSTRAINTS = (
     "FOR (a:Article) REQUIRE a.uid IS UNIQUE",
     "CREATE CONSTRAINT item_uid IF NOT EXISTS "
     "FOR (i:Item) REQUIRE i.uid IS UNIQUE",
+    "CREATE CONSTRAINT coverage_uid IF NOT EXISTS "
+    "FOR (c:Coverage) REQUIRE c.uid IS UNIQUE",
 )
 
 INDEXES = (
@@ -46,3 +51,12 @@ def article_uid(effective_from: str, unit: str, number: str) -> str:
 
 def item_uid(article: str, paragraph_no: int, item_no: int) -> str:
     return f"{article}#{paragraph_no}-{item_no}"
+
+
+def coverage_uid(article: str, coverage: str) -> str:
+    return f"{article}#{coverage}"
+
+
+def table_item_uid(article: str, coverage: str, paragraph_no: int, item_no: int) -> str:
+    """표에서 뽑은 면책 사유. 같은 조문 안에서도 보장종목마다 다르다."""
+    return f"{article}#{coverage}#{paragraph_no}-{item_no}"

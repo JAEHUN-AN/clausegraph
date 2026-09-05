@@ -115,3 +115,19 @@ class TermsDocument(BaseModel):
     admrul_seq: int
     articles: tuple[Article, ...]
     sections: tuple[str, ...]
+
+
+class TableExclusion(BaseModel):
+    """표 안에 적힌 면책 사유 하나.
+
+    실손 계열은 면책을 조문 문장이 아니라 표로 적는다. 같은 조문 안에서도
+    보장종목((1)상해급여, (2)질병급여 …)마다 사유가 다르므로, 조문 밑의
+    호로만 두면 어느 보장에 걸리는 사유인지 잃는다.
+    """
+
+    model_config = {"frozen": True}
+
+    coverage: str = Field(description="보장종목 — '(1)상해급여' 등")
+    paragraph: int = Field(description="항 번호. 항 표기가 없으면 1")
+    number: int = Field(description="호 번호")
+    text: str
