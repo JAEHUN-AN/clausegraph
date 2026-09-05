@@ -1,0 +1,68 @@
+{"case_slno":4,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"DEFINITION","handled":false,"evidence":"I20)이 급성심근경색증 특별약관의 보장대상인지 여부"}
+{"case_slno":5,"cvpl":"실손보험(치료비)","dispute_type":"DUPLICATE","handled":true,"evidence":"본인부담상한액 초과액(= 환급금)이 실손보험금 지급 대상에 포함되는지 여부"}
+{"case_slno":14,"cvpl":"실손보험(기타)","dispute_type":"EXCLUSION","handled":true,"evidence":"질병치료 목적의 보조기 구입비용이 실손보험의 보장 대상에 해당하는지 여부"}
+{"case_slno":15,"cvpl":"질병·상해·간병보험(입원)","dispute_type":"DEFINITION","handled":false,"evidence":"병행한 질병치료에 대한 질병입원일당 지급 여부"}
+{"case_slno":18,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"암보장개시일 이후에도 암의 진단시점에 따라 보험금액이 달라질 수 있는지 여부"}
+{"case_slno":25,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"한 아바스틴 주입술*이 보험약관에서 정한 “수술”에 해당되지는 여부 *안구전용 주사침을 가지고 유리체강 내에"}
+{"case_slno":26,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"치과치료에서 발생한 비급여 의료비가 실손의료보험 약관에서 정한 보험금 지급사유에 해당하는지 여부"}
+{"case_slno":27,"cvpl":"보험(일반)","dispute_type":"PROCEDURE","handled":false,"evidence":"피보험자가 의사능력이 없는 경우 가족이 피보험자를 대신하여 보험금을 청구할 수 있는지 여부"}
+{"case_slno":35,"cvpl":"생명보험(사망)","dispute_type":"DISCLOSURE","handled":false,"evidence":"보험회사가 피보험자의 서명 미비를 충분히 알 수 있었던 경우 회사의 보험금 지급 책임 여부"}
+{"case_slno":37,"cvpl":"생명보험(사망)","dispute_type":"CONTRACT","handled":false,"evidence":"인)를 조건으로 보험 가입을 유도한 판매행위가 보험계약의 취소사유에 해당될 수 있는지 여부"}
+{"case_slno":39,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"DISCLOSURE","handled":false,"evidence":"경우에도 보험회사에 직업 변경사실을 통지할 의무가 발생하는지 여부"}
+{"case_slno":49,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"한방치료에서 발생한 비급여 입원치료비가 실손보험 약관에서 정한 보험금 지급대상에 해당하는지 여부"}
+{"case_slno":54,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"PROOF","handled":false,"evidence":"진단의 기초가 되는 객관적인 검사결과가 충분하지 않음에도 뇌혈관질환 진단을 받았다는 사정만으로 뇌혈관질환 진"}
+{"case_slno":56,"cvpl":"실손보험(기타)","dispute_type":"EXCLUSION","handled":true,"evidence":"된 압박고정용 재료대가 실손보험에서 보상하지 않는 사항으로 정하고 있는 ‘보조기 등’에 해당하는지 여부"}
+{"case_slno":59,"cvpl":"질병·상해·간병보험(입원)","dispute_type":"DEFINITION","handled":false,"evidence":"본건 보험약관에서 정하는 “입원비” 지급사유에 해당되는지 여부"}
+{"case_slno":61,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"삽입술이 본건 보험약관에서 정하는 “수술”에 해당되는지 여부"}
+{"case_slno":62,"cvpl":"보험(일반)","dispute_type":"DISCLOSURE","handled":false,"evidence":"의심소견(이상소견)도 모두 계약전 알릴의무 이행 대상에 포함되는지 여부"}
+{"case_slno":64,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"PROOF","handled":false,"evidence":"만 기재된 경우, 급성심근경색증으로 진단을 받은 것으로 볼 수 있는지 여부"}
+{"case_slno":71,"cvpl":"실손보험(수술비)","dispute_type":"DEFINITION","handled":false,"evidence":"사용한 백내장 수술이 실손보험금의 보상 대상에 해당하는지 여부"}
+{"case_slno":72,"cvpl":"실손보험(치료비)","dispute_type":"SCOPE","handled":true,"evidence":"약의 경우, ’비급여 주사료 특약‘ 미가입 시 ’무릎 주사치료‘에 대하여 보상을 받을 수 있는지 여부"}
+{"case_slno":75,"cvpl":"질병·상해·간병보험(입원)","dispute_type":"DEFINITION","handled":false,"evidence":"통증완화 치료가 암 입원일당 보험금 지급사유에 해당되는지 여부"}
+{"case_slno":76,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"소아의 특발성 저신장 등에 대하여 처방된 성장호르몬제의 약값이 전액본인부담으로 청구된 경우 실손보험금의 보상"}
+{"case_slno":78,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"PROOF","handled":false,"evidence":"받았으나 영구치 발거 진단확정일이 확인이 되지 않을 경우, 보험회사가 임플란트 치료비 지급 의무가 있는지"}
+{"case_slno":79,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"청약 이후 5년간 부담보가 설정된 특정부위ㆍ질병에 대한 치료는 있으나 보험금 청구가 없는 경우 전 기간 부담"}
+{"case_slno":80,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"DEFINITION","handled":false,"evidence":"대해 보험회사가 특정전염병 진단비 지급 의무가 있는지 여부"}
+{"case_slno":81,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"퇴직 이후에 암진단을 받은 경우 보험금 지급 대상이 되는지 여부"}
+{"case_slno":82,"cvpl":"실손보험(치료비)","dispute_type":"DUPLICATE","handled":true,"evidence":"피보험자가 산재보험금을 지급 받은 경우, 피보험자는 보험회사로부터 실제로 부담한 의료비를 전액 보상 받을 수"}
+{"case_slno":85,"cvpl":"보험(일반)","dispute_type":"EXCLUSION","handled":true,"evidence":"청약 이후 5년간 부담보 설정된 특정부위ㆍ질병에 대한 치료는 있으나 보험금 청구가 없는 경우 전 기간 부담보"}
+{"case_slno":86,"cvpl":"실손보험(치료비)","dispute_type":"TIMING","handled":true,"evidence":"실손보험 면책기간 중 발생한 통원의료비 보상 여부"}
+{"case_slno":87,"cvpl":"생명보험(사망)","dispute_type":"DEFINITION","handled":false,"evidence":"농업작업 중 발생한 사고로서 보험금 지급 사유에 해당하는지 여부"}
+{"case_slno":96,"cvpl":"실손보험(약제비)","dispute_type":"DUPLICATE","handled":true,"evidence":"위험분담제 약제의 경우 피보험자는 제약회사로부터 의료비의 일부를 환급 받는데, 이 환급액이 실손보험의 보상"}
+{"case_slno":101,"cvpl":"실손보험(치료비)","dispute_type":"PROOF","handled":false,"evidence":"다른 합병증이나 경과관찰의 필요성이 확인되지 않은 경우의 입원의료비 지급 가능 여부"}
+{"case_slno":104,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"양적출술이 약관에서 정한 질병수술비 지급대상에 해당하는지 여부"}
+{"case_slno":110,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"보험계약 체결시점의 한국표준질병·사인분류(KCD)를 기준으로 보험금 지급대상을 판단해야 하는지"}
+{"case_slno":111,"cvpl":"보험(일반)","dispute_type":"CONTRACT","handled":false,"evidence":"건강(우량)체 적용 후 정산받은 보험료 환급금액이 적정한지 여부"}
+{"case_slno":113,"cvpl":"생명보험(연금)","dispute_type":"TIMING","handled":true,"evidence":"진단확정)가 암진단비 선택특약에서 보장하는 기간 내에 발생하였는지 여부"}
+{"case_slno":119,"cvpl":"실손보험(수술비)","dispute_type":"UNKNOWN","handled":false,"evidence":""}
+{"case_slno":125,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"DEFINITION","handled":false,"evidence":"내 전체 자음의 발음이 불가능해야 장해로 판단 가능하다며 보험금 지급을 거절한 보험사의 보험금 부지급이 적"}
+{"case_slno":128,"cvpl":"실손보험(치료비)","dispute_type":"DEFINITION","handled":false,"evidence":"자가 받은 치료 및 시술이 약관에서 보장하는 치료의 목적에 부합하는지 여부"}
+{"case_slno":131,"cvpl":"생명보험(연금)","dispute_type":"CONTRACT","handled":false,"evidence":"주계약에서 정하고 있는 만기보험금과 관련한 내용을 특약에도 적용해야 하는지 여부"}
+{"case_slno":132,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"DEFINITION","handled":false,"evidence":"있는 보험에서, 동일 사고에 대해 장해지급률이 증가(변동)함에 따라 기(旣)지급된 보험금을 공제하여 보험금"}
+{"case_slno":133,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"진단확정)가 암진단비 선택특약에서 보장하는 기간 내에 발생하였는지 여부"}
+{"case_slno":134,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"PROOF","handled":false,"evidence":"작업 중에 허리를 다쳤는지를 충분히 입증하였는지 여부"}
+{"case_slno":135,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"보험가입 이후 KCD 개정으로 질병의 분류기준이 변경되어 가입시점의 KCD 기준상 경계성종양에 해당하나 진단"}
+{"case_slno":136,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"TIMING","handled":true,"evidence":"단체보험의 피보험자가 소속 회사에서 퇴직한 이후에도 진단보험금의 지급 대상이 되는지 여부"}
+{"case_slno":137,"cvpl":"질병·상해·간병보험(진단)","dispute_type":"DEFINITION","handled":false,"evidence":"진단보험금 지급 대상인 특정전염병에 해당하는지 여부"}
+{"case_slno":138,"cvpl":"질병·상해·간병보험(입원)","dispute_type":"DEFINITION","handled":false,"evidence":"직접적인 목적으로 입원’한 경우에 해당하는지 여부"}
+{"case_slno":139,"cvpl":"질병·상해·간병보험(입원)","dispute_type":"TIMING","handled":true,"evidence":"하는 입원보험금을 지급하는 범위 및 면책기간에 해당하는지 여부"}
+{"case_slno":140,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"IPL시술이 약관이 정하는 수술의 정의와 범위에 포함되는지 여부"}
+{"case_slno":141,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"해당 약관에서 정하고 있는 수술의 정의와 범위에 포함되는지 여부"}
+{"case_slno":142,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"합술이 약관에서 정하고 있는 수술의 정의와 범위에 포함되는지 여부"}
+{"case_slno":143,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"출술이 약관에서 정하고 있는 수술의 정의와 범위에 포함되는지 여부"}
+{"case_slno":144,"cvpl":"질병·상해·간병보험(수술)","dispute_type":"DEFINITION","handled":false,"evidence":"약관에서 정하고 있는 치과치료보험금 지급 사유에 해당하는지 여부"}
+{"case_slno":145,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"UNKNOWN","handled":false,"evidence":""}
+{"case_slno":147,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"TIMING","handled":true,"evidence":"약관에서 정한 보험나이를 계산하는 방식을 적용할 때 신청인의 보험나이가 80세를 초과하였는 지 여부"}
+{"case_slno":150,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"DISCLOSURE","handled":false,"evidence":"약할 때에는 직업을 실제와는 다르게 고지하였으나 실제 직업을 보험계약 체결 시부터 보험사고 발생 시까지 변경"}
+{"case_slno":151,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"DISCLOSURE","handled":false,"evidence":"관의 내용이 보험계약 체결 권유 시 설명의무 대상에 해당하는지 여부"}
+{"case_slno":152,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"PROCEDURE","handled":false,"evidence":"피보험자(보험금 청구권자)가 의사능력이 없는 경우 가족이 대신하여 보험금을 청구할 수 있는지 여부"}
+{"case_slno":154,"cvpl":"질병·상해·간병보험(기타)","dispute_type":"EXCLUSION","handled":true,"evidence":"으로 보험금을 수령하지 않은 경우가 부담보 조건을 해제할 수 있는 대상에 해당하는지 여부"}
+{"case_slno":155,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"한방병원에서 받은 비급여 항목에 대한 치료비가 ｢실손의료보험 약관｣에서 정한 보험금 지급대상에 해당하는지 여"}
+{"case_slno":156,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"치과치료에서 발생한 비급여 의료비가 ｢실손의료보험 약관｣에서 정한 보험금 지급사유에 해당하는지 여부"}
+{"case_slno":157,"cvpl":"실손보험(치료비)","dispute_type":"SCOPE","handled":true,"evidence":"｢비급여 주사료 특약｣을 가입하지 않은 경우 ’관절강내 무릎 주사치료‘를 보상받을 수 있는지 여부"}
+{"case_slno":158,"cvpl":"실손보험(치료비)","dispute_type":"DUPLICATE","handled":true,"evidence":"국민건강보험공단이 부담하는 본인부담상한액 초과액(=환급금)이 실손의료보험금 지급 대상에 포함되는지 여부"}
+{"case_slno":159,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"바코패드가 ｢실손의료보험｣의 보상하지 않는 사항에 해당하는 ‘보조기’에 해당하는지 여부"}
+{"case_slno":160,"cvpl":"실손보험(치료비)","dispute_type":"EXCLUSION","handled":true,"evidence":"성장기 청소년의 특발성 저신장 치료를 위한 성장호르몬제 투여에 소요된 비용(급여의료비)이 실손의료보험금 지급"}
+{"case_slno":161,"cvpl":"실손보험(약제비)","dispute_type":"DUPLICATE","handled":true,"evidence":"위험분담제 대상 항암제나 치료제 등을 투여하거나 복용한 환자에게 제약회사가 지급하는 약제비의 일부가 실손의료"}
+{"case_slno":162,"cvpl":"실손보험(수술비)","dispute_type":"DEFINITION","handled":false,"evidence":"손의료보험금을 지급해야 하는 대상에 해당하는지 여부"}
+{"case_slno":163,"cvpl":"실손보험(기타)","dispute_type":"EXCLUSION","handled":true,"evidence":"예방목적의 건강검진, 백신 접종 및 증명서 발급 비용 등이 실손의료보험금의 보상 대상에 해당하는지 여부"}
