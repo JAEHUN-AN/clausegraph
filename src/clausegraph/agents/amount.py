@@ -7,11 +7,16 @@
 
     지급액 = min( (실제부담액 − 공제금액) × 보상비율,  잔여 연간한도 )
 
-- **공제금액**은 통원에만 붙고, "정액 또는 의료비의 N% 중 큰 금액"이다.
-- **보상비율**은 자기부담률의 나머지다(급여 20% 자기부담 -> 0.8).
+- **공제금액**은 "여러 항 중 큰 금액"이다. (1)(2)의 공제는 통원에만 붙지만,
+  3대비급여ㆍ비급여 MRI의 공제는 "1회당"이라 입원에도 붙는다.
+- **보상비율**은 입원에만 붙는다. 제3조 표의 입원 행은 "…의 70%에 해당하는
+  금액"처럼 비율을 명시하지만, 통원 행은 공제금액을 뺀 금액 자체를 보상금액으로
+  정한다. 입원은 급여 80%ㆍ특약1 70%ㆍ특약2 50%, 통원은 모두 비율이 없다.
 - **연간한도**는 보장종목별로 따로 있고, 이미 지급된 금액을 뺀 잔액이 상한이다.
 - **감액기간**은 보장개시 초기의 지급사유에 비율을 곱한다. 다른 요소를
-  적용한 **뒤에** 곱한다 — 순서를 바꾸면 한도 판정이 달라진다.
+  적용한 **뒤에** 곱한다 — 순서를 바꾸면 한도 판정이 달라진다. 다만
+  **표준약관은 감액기간을 정하지 않는다.** 규칙이 값을 주지 않으면 이
+  단계는 건너뛴다 — 근거 없이 반을 깎으면 과소지급이다(notes/019).
 
 파라미터가 없으면 **계산했다고 말하지 않는다**(`computed=False`).
 가드레일이 `HUMAN_REVIEW`로 넘긴다. 추측한 값으로 지급액을 내는 것이 최악이다.
@@ -22,11 +27,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .amount_rules import AmountRule
-
-# 감액기간: 보장개시일부터 이 기간 안의 지급사유는 약관이 정한 비율만 지급한다.
-REDUCTION_PERIOD_DAYS = 730
-REDUCTION_RATE = 0.5
-
 
 # 급여 통원 공제의 정액이 커지는 의료기관. 순서가 중요하다 — "종합병원"이
 # "병원"을 포함하므로 큰 쪽을 먼저 본다.
@@ -91,18 +91,21 @@ def compute(
     # 1. 공제 — 통원에만. 약관은 여러 항 중 **큰 금액**을 빼라고 한다.
     #    항을 하나라도 빼먹으면 공제를 덜 빼게 되고, 그건 곧 과다지급이다.
     deductible = 0
-    if not inpatient:
+    if not inpatient or rule.deductible_applies_to_inpatient:
         deductible, missing = _outpatient_deductible(
             claimed_amount, rule, institution, copay_rate
         )
         note = "덜 뺐을 수 있다" if missing else "여러 항 중 큰 쪽"
-        steps.append(f"통원 공제 {deductible:,}원({note})")
+        label = "1회당 공제" if rule.deductible_applies_to_inpatient else "통원 공제"
+        steps.append(f"{label} {deductible:,}원({note})")
     payable = max(0, claimed_amount - deductible)
 
-    # 2. 보상비율.
-    rate = rule.reimburse_rate or 0.0
+    # 2. 보상비율 — 입원과 통원이 다르다. 통원은 약관이 비율을 걸지 않아
+    #    1.0이고, 그때는 굳이 "보상비율 100%"라고 적지 않는다.
+    rate = rule.rate_for(inpatient) or 0.0
     payable = int(payable * rate)
-    steps.append(f"보상비율 {rate:.0%}")
+    if rate != 1.0:
+        steps.append(f"보상비율 {rate:.0%}")
 
     # 2-1. 통원 1회당 한도 — 연간한도와 별개로 걸린다.
     #      비급여 특약은 "통원 1회당 20만원 이내"를 따로 정한다.
@@ -111,12 +114,15 @@ def compute(
         steps.append(f"통원 1회 한도 {visit_limit:,}원으로 제한")
         payable = visit_limit
 
-    # 3. 감액기간 — 다른 요소를 적용한 뒤에 곱한다.
-    if days_since_enrollment < REDUCTION_PERIOD_DAYS:
-        payable = int(payable * REDUCTION_RATE)
+    # 3. 감액기간 — 다른 요소를 적용한 뒤에 곱한다. 규칙이 정하지 않았으면
+    #    (표준약관은 정하지 않는다) 건너뛴다.
+    period = rule.reduction_period_days
+    reduction = rule.reduction_rate
+    if period is not None and reduction is not None and days_since_enrollment < period:
+        payable = int(payable * reduction)
         steps.append(
             f"가입 후 {days_since_enrollment}일 — 감액기간"
-            f"({REDUCTION_PERIOD_DAYS}일) 안이라 {REDUCTION_RATE:.0%}"
+            f"({period}일) 안이라 {reduction:.0%}"
         )
 
     # 4. 연간한도 — 이미 지급된 금액을 뺀 잔액이 상한이다.

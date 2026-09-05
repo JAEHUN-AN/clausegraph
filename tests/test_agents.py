@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 
 from clausegraph.agents import guardrails
-from clausegraph.agents.amount import REDUCTION_PERIOD_DAYS, compute
+from clausegraph.agents.amount import compute
 from clausegraph.agents.amount_rules import RULES, find_rule
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
@@ -143,7 +143,7 @@ def test_copay_rate_term_is_included_when_given() -> None:
     )
 
     assert with_rate.is_upper_bound is False
-    assert with_rate.value == int((500_000 - 300_000) * rule.reimburse_rate)
+    assert with_rate.value == int((500_000 - 300_000) * rule.rate_for(inpatient=False))
 
 
 def test_missing_copay_rate_makes_the_amount_an_upper_bound() -> None:
@@ -159,7 +159,7 @@ def test_missing_copay_rate_makes_the_amount_an_upper_bound() -> None:
     assert result.is_upper_bound is True
     assert "건강보험 본인부담률" in result.missing
     # 항을 빼먹은 쪽이 더 크다 — 그래서 상한이다.
-    assert result.value > int((500_000 - 300_000) * rule.reimburse_rate)
+    assert result.value > int((500_000 - 300_000) * rule.rate_for(inpatient=False))
 
 
 def test_tertiary_institution_uses_the_larger_flat_deductible() -> None:
@@ -178,8 +178,8 @@ def test_tertiary_institution_uses_the_larger_flat_deductible() -> None:
     )
 
     assert clinic.value > tertiary.value
-    assert clinic.value == int((claimed - 16_000) * rule.reimburse_rate)
-    assert tertiary.value == int((claimed - 20_000) * rule.reimburse_rate)
+    assert clinic.value == int((claimed - 16_000) * rule.rate_for(inpatient=False))
+    assert tertiary.value == int((claimed - 20_000) * rule.rate_for(inpatient=False))
 
 
 def test_unknown_institution_is_flagged_not_guessed() -> None:
@@ -212,7 +212,7 @@ def test_visit_limit_does_not_apply_to_inpatient() -> None:
 
     result = compute(1_000_000, days_since_enrollment=800, rule=rule, inpatient=True)
 
-    assert result.value == int(1_000_000 * rule.reimburse_rate)
+    assert result.value == int(1_000_000 * rule.rate_for(inpatient=True))
     assert "통원 1회 한도" not in result.basis
 
 
@@ -224,7 +224,7 @@ def test_inpatient_applies_only_the_rate() -> None:
     )
 
     assert result.computed is True
-    assert result.value == int(1_000_000 * rule.reimburse_rate)
+    assert result.value == int(1_000_000 * rule.rate_for(inpatient=True))
 
 
 def test_outpatient_subtracts_the_larger_deductible_first() -> None:
@@ -235,16 +235,35 @@ def test_outpatient_subtracts_the_larger_deductible_first() -> None:
 
     result = compute(claimed, days_since_enrollment=800, rule=rule, inpatient=False)
 
-    assert result.value == int((claimed - deductible) * rule.reimburse_rate)
+    assert result.value == int((claimed - deductible) * rule.rate_for(inpatient=False))
+
+
+def test_standard_terms_define_no_reduction_period() -> None:
+    # 표준약관에는 보장개시 후 감액기간 규정이 없다. 없는 감액을 걸면
+    # 2년 미만 가입자의 지급액이 근거 없이 반이 된다(notes/019).
+    assert all(
+        rule.reduction_period_days is None and rule.reduction_rate is None
+        for rule in RULES
+    )
+
+    rule = _complete_rule()
+    early = compute(1_000_000, days_since_enrollment=30, rule=rule)
+    late = compute(1_000_000, days_since_enrollment=3_000, rule=rule)
+
+    assert early.value == late.value
+    assert "감액기간" not in early.basis
 
 
 def test_reduction_period_is_applied_after_the_rate() -> None:
-    rule = _complete_rule()
+    # 회사 상품 약관이 감액기간을 정한 경우의 순서를 고정한다. 다른 요소를
+    # 적용한 **뒤에** 곱해야 한다 — 순서를 바꾸면 한도 판정이 달라진다.
+    rule = replace(_complete_rule(), reduction_period_days=730, reduction_rate=0.5)
 
     early = compute(1_000_000, days_since_enrollment=30, rule=rule)
-    late = compute(1_000_000, days_since_enrollment=REDUCTION_PERIOD_DAYS, rule=rule)
+    late = compute(1_000_000, days_since_enrollment=730, rule=rule)
 
     assert early.value == int(late.value * 0.5)
+    assert "감액기간(730일) 안이라 50%" in early.basis
 
 
 def test_annual_limit_caps_the_payout() -> None:

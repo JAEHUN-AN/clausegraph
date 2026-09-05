@@ -43,8 +43,13 @@ class AmountRule:
 
     product: str
     coverage: str
-    # 보상 비율. 자기부담 20%면 0.8.
-    reimburse_rate: float | None
+    # 보상 비율이 **입원과 통원에서 다르다.** 제3조 표의 입원 행은 비율을
+    # 명시하지만("...의 70%에 해당하는 금액"), 통원 행은 공제금액을 뺀 금액
+    # 자체를 보상금액으로 정하고 비율을 걸지 않는다. 그래서 통원은 1.0이다.
+    #
+    # 비율 하나로 뭉치면 통원을 과소지급한다(notes/019).
+    inpatient_rate: float | None
+    outpatient_rate: float | None
     # 연간 보험가입금액 한도(원).
     annual_limit: int | None
     # 통원 정액 공제(원)와 비율 공제. 약관은 "3만원과 보장대상 의료비의
@@ -61,15 +66,37 @@ class AmountRule:
     # 오는 값이라 **약관에 없다.** 그래서 이 값이 True인 규칙은 청구가
     # 본인부담률을 함께 들고 오지 않으면 공제를 끝까지 계산할 수 없다.
     outpatient_deductible_uses_copay_rate: bool = False
+    # 3대비급여ㆍ비급여 MRI는 공제가 "1회당"이라 **입원에도 붙는다.**
+    # (1)(2)의 공제는 통원에만 붙는다 — 그쪽이 기본값이다.
+    deductible_applies_to_inpatient: bool = False
+    # 감액기간 — 보장개시 초기의 지급사유에 비율을 곱하는 규정.
+    #
+    # **표준약관에는 없다.** 급여ㆍ특약 조문 전체에서 '감액'이 나오는 곳은
+    # 알릴의무 위반, 보험가입금액 감액 요청, 지급절차 안내뿐이고, 어디에도
+    # 보장개시 후 N일 동안 얼마만 지급한다는 규정이 없다(notes/019).
+    #
+    # 그래서 표준약관 규칙은 전부 None이다. 개별 회사 상품 약관이 정한
+    # 경우에만 값이 들어간다. 근거 없는 감액은 과소지급이다.
+    reduction_period_days: int | None = None
+    reduction_rate: float | None = None
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
 
+    def rate_for(self, inpatient: bool) -> float | None:
+        return self.inpatient_rate if inpatient else self.outpatient_rate
+
     def complete_for_inpatient(self) -> bool:
-        return self.reimburse_rate is not None and self.annual_limit is not None
+        if self.inpatient_rate is None or self.annual_limit is None:
+            return False
+        # 입원에도 공제가 붙는 규칙이면 공제 값까지 있어야 계산이 된다.
+        if not self.deductible_applies_to_inpatient:
+            return True
+        return None not in (self.outpatient_deductible, self.outpatient_deductible_rate)
 
     def complete_for_outpatient(self) -> bool:
-        return self.complete_for_inpatient() and None not in (
+        return self.outpatient_rate is not None and None not in (
+            self.annual_limit,
             self.outpatient_deductible,
             self.outpatient_deductible_rate,
         )
@@ -109,7 +136,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=BENEFIT,
         coverage="(1)상해급여",
-        reimburse_rate=0.80,
+        inpatient_rate=0.80,
+        outpatient_rate=1.00,
         annual_limit=50_000_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
@@ -121,7 +149,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=BENEFIT,
         coverage="(2)질병급여",
-        reimburse_rate=0.80,
+        inpatient_rate=0.80,
+        outpatient_rate=1.00,
         annual_limit=50_000_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
@@ -133,7 +162,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(1)상해비급여",
-        reimburse_rate=0.70,
+        inpatient_rate=0.70,
+        outpatient_rate=1.00,
         annual_limit=50_000_000,
         outpatient_deductible=30_000,
         outpatient_deductible_rate=0.30,
@@ -144,7 +174,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(2)질병비급여",
-        reimburse_rate=0.70,
+        inpatient_rate=0.70,
+        outpatient_rate=1.00,
         annual_limit=50_000_000,
         outpatient_deductible=30_000,
         outpatient_deductible_rate=0.30,
@@ -155,7 +186,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(1)상해비급여",
-        reimburse_rate=0.50,
+        inpatient_rate=0.50,
+        outpatient_rate=1.00,
         annual_limit=10_000_000,
         outpatient_deductible=50_000,
         outpatient_deductible_rate=0.50,
@@ -166,7 +198,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(2)질병비급여",
-        reimburse_rate=0.50,
+        inpatient_rate=0.50,
+        outpatient_rate=1.00,
         annual_limit=10_000_000,
         outpatient_deductible=50_000,
         outpatient_deductible_rate=0.50,
@@ -174,9 +207,63 @@ RULES: tuple[AmountRule, ...] = (
         source_articles=_MILD_ARTICLES,
         note="상해비급여와 같은 구조",
     ),
-    # 3대비급여·비급여 MRI는 제3조가 항목별로 따로 한도를 정한다. 하나의
-    # 비율·한도로 요약할 수 없어 넣지 않는다 — 규칙이 없으면 계산기가
-    # 계산하지 않고 가드레일이 사람에게 넘긴다.
+    # 3대비급여와 비급여 MRI는 제3조 <표1>이 **항목마다** 공제와 한도를
+    # 따로 정한다. 그래서 보장종목 하나로 묶지 않고 항목별 규칙으로 넣는다.
+    #
+    # 이 항목들은 (1)(2)와 두 가지가 다르다.
+    #   - 공제가 "1회당"이라 입원에도 붙는다.
+    #   - 조문이 비율을 걸지 않는다("공제금액을 뺀 금액을 … 보상합니다").
+    AmountRule(
+        product=SEVERE,
+        coverage="(3)3대비급여-근골격계이학요법치료ㆍ체외충격파치료",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=3_500_000,
+        outpatient_deductible=30_000,
+        outpatient_deductible_rate=0.30,
+        deductible_applies_to_inpatient=True,
+        source_articles=_SEVERE_ARTICLES,
+        note="연간 50회 한도(최초 10회, 이후 10회 단위)는 누적 횟수를 저장해야 한다",
+    ),
+    AmountRule(
+        product=SEVERE,
+        coverage="(3)3대비급여-주사료",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=2_500_000,
+        outpatient_deductible=30_000,
+        outpatient_deductible_rate=0.30,
+        deductible_applies_to_inpatient=True,
+        source_articles=_SEVERE_ARTICLES,
+        note="연간 50회 한도는 누적 횟수를 저장해야 한다",
+    ),
+    AmountRule(
+        product=SEVERE,
+        coverage="(3)3대비급여-자기공명영상진단",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=3_000_000,
+        outpatient_deductible=30_000,
+        outpatient_deductible_rate=0.30,
+        deductible_applies_to_inpatient=True,
+        source_articles=_SEVERE_ARTICLES,
+        note="횟수 한도는 없다. 부위별로 각 1회로 본다",
+    ),
+    AmountRule(
+        product=MILD,
+        coverage="(3)비급여 자기공명영상진단",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=2_000_000,
+        outpatient_deductible=50_000,
+        outpatient_deductible_rate=0.50,
+        deductible_applies_to_inpatient=True,
+        source_articles=_MILD_ARTICLES,
+        note="특약1의 3대비급여와 공제ㆍ한도가 다르다 — 5만원/50%, 200만원",
+    ),
+    # 상급병실료 차액(비급여 병실료의 50%, 1일 평균 10만원 한도)과 특약2
+    # 입원의 의원급 1회당 300만원 한도는 넣지 않았다. 입원일수별 평균이나
+    # 1회 단위 상태가 필요한데 지금 구조에 그 값이 없다.
 )
 
 _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}
