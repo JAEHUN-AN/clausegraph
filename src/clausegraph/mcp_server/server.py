@@ -86,6 +86,20 @@ RETURN v.effective_from AS effective_from, v.effective_to AS effective_to,
        v.article_count AS article_count
 """
 
+# 부칙 적용례 — 세칙 시행일과 약관 적용일이 다르고, 적용 대상이 신계약으로
+# 한정되는 경우가 있다. 버전을 알려 줄 때 함께 보여야 한다.
+_PROVISIONS_AT = """
+MATCH (v:Version)
+WHERE v.effective_from <= $on_date AND $on_date < v.effective_to
+MATCH (v)-[:HAS_PROVISION]->(p:Provision)
+WHERE p.new_contracts_only
+RETURN p.promulgated_on AS promulgated_on,
+       p.candidate_dates AS candidate_dates,
+       p.text AS text
+ORDER BY p.promulgated_on DESC
+LIMIT 5
+"""
+
 
 @mcp.tool()
 def list_products() -> str:
@@ -137,10 +151,26 @@ def resolve_terms_version(enrolled_on: str) -> str:
             "없음을 알려야 한다."
         )
     end = "현재" if record["effective_to"] == OPEN_ENDED else record["effective_to"]
-    return (
+    lines = [
         f"가입일 {enrolled_on} -> 적용 약관 {record['effective_from']} ~ {end} "
         f"(조문 {record['article_count']}개)"
-    )
+    ]
+
+    with driver().session() as session:
+        provisions = list(
+            session.run(_PROVISIONS_AT, on_date=parsed.strftime("%Y%m%d"))
+        )
+    if provisions:
+        lines.append(
+            "\n주의: 이 버전에는 신계약부터 적용된다고 정한 부칙이 있다. "
+            "가입일이 그 시점 이전이면 옛 약관이 남아 있을 수 있으므로 "
+            "단정하지 말고 심사자 확인이 필요하다고 전할 것."
+        )
+        for provision in provisions:
+            dates = ", ".join(provision["candidate_dates"]) or "날짜 미상"
+            lines.append(f"  공포 {provision['promulgated_on']} / 날짜 후보 {dates}")
+            lines.append(f"    {_shorten(provision['text'])}")
+    return "\n".join(lines)
 
 
 @mcp.tool()

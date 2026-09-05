@@ -13,10 +13,14 @@ from neo4j import Driver
 
 from .models import Evidence
 
+# 세칙 시행일이 아니라 **약관 적용일**로 구간을 잡는다. 부칙이
+# "2026년 6월 6일 이후 체결되는 보험계약부터 적용한다"고 정하면
+# 5/6~6/6 가입자에게는 옛 약관이 적용된다 (notes/015).
 _VERSION_RANGES = """
 MATCH (v:Version)
-RETURN v.effective_from AS effective_from, v.effective_to AS effective_to
-ORDER BY v.effective_from
+RETURN coalesce(v.applies_from, v.effective_from) AS applies_from,
+       v.effective_from AS effective_from
+ORDER BY applies_from
 """
 
 _COVERAGE_ARTICLES = """
@@ -44,10 +48,11 @@ def clear_caches() -> None:
 
 
 def _version_ranges(driver: Driver) -> list[tuple[str, str]]:
+    """(적용 시작일, 버전 식별자) 목록. 적용일 순으로 정렬돼 있다."""
     if not _VERSION_CACHE:
         with driver.session() as session:
             _VERSION_CACHE.extend(
-                (record["effective_from"], record["effective_to"])
+                (record["applies_from"], record["effective_from"])
                 for record in session.run(_VERSION_RANGES)
             )
     return _VERSION_CACHE
@@ -59,10 +64,18 @@ def resolve_version(driver: Driver, enrolled_on: date) -> str | None:
     버전이 넷뿐이라 구간을 한 번 읽어 두고 프로세스 안에서 고른다.
     """
     on_date = enrolled_on.strftime("%Y%m%d")
-    for effective_from, effective_to in _version_ranges(driver):
-        if effective_from <= on_date < effective_to:
-            return effective_from
-    return None
+    ranges = _version_ranges(driver)
+    # 적용일 순으로 정렬돼 있으므로, 가입일 이하인 마지막 구간이 답이다.
+    chosen = None
+    for applies_from, version in ranges:
+        if applies_from <= on_date:
+            chosen = version
+        else:
+            break
+    if chosen is None:
+        return None
+    # 가장 이른 적용일보다 앞선 가입은 수집 범위 밖이다.
+    return chosen
 
 
 def find_coverage(driver: Driver, product: str, version: str) -> tuple[Evidence, ...]:

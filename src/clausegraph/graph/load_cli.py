@@ -16,14 +16,16 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
+from ..law.appendix import parse_provisions
 from ..law.parse_cli import parse_file
 from ..law.table_parser import Lexicon
-from .loader import apply_schema, link_history, load_version
+from .loader import apply_schema, link_history, load_provisions, load_version
 from .queries import COUNTS
 from .schema import OPEN_ENDED
 
 MANIFEST_FILENAME = "manifest.json"
 TERMS_DIRNAME = "terms"
+XML_DIRNAME = "xml"
 
 
 def run(data_dir: Path) -> int:
@@ -45,7 +47,7 @@ def run(data_dir: Path) -> int:
         print(f"적재 대상 {len(versions)}개 버전\n")
 
         lexicon = Lexicon.from_terms_dir(data_dir / TERMS_DIRNAME)
-        totals = {"articles": 0, "items": 0, "exclusions": 0, "table_items": 0}
+        totals = {"articles": 0, "items": 0, "exclusions": 0, "table_items": 0, "provisions": 0}
         for version in versions:
             doc = parse_file(data_dir / TERMS_DIRNAME / version["file"])
             result = load_version(
@@ -60,11 +62,33 @@ def run(data_dir: Path) -> int:
             totals["items"] += result.items
             totals["exclusions"] += result.exclusions
             totals["table_items"] += result.table_items
+
+            # 부칙 적용례 — 세칙 시행일과 약관 적용일이 다를 수 있다.
+            provisions = 0
+            xml_path = data_dir / XML_DIRNAME / f"{version['admrul_seqs'][-1]}.xml"
+            if xml_path.exists():
+                # 그 버전을 만든 개정(가장 이른 것)의 발령일자로 자기 부칙을 가린다.
+                own = next(
+                    (
+                        entry["promulgated_on"]
+                        for entry in manifest["revisions"]
+                        if entry["admrul_seq"] == version["admrul_seqs"][0]
+                    ),
+                    None,
+                )
+                provisions = load_provisions(
+                    driver,
+                    version["effective_from"],
+                    parse_provisions(xml_path.read_text(encoding="utf-8")),
+                    own_promulgated_on=own,
+                )
+                totals["provisions"] += provisions
             end = version["effective_to"] or "현재"
             print(
                 f"  {version['effective_from']} ~ {end}  "
                 f"조문 {result.articles:4d}  호 {result.items:4d}  면책 {result.exclusions:2d}  "
-                f"표 사유 {result.table_items:3d}(보장종목 {result.coverages:2d})"
+                f"표 사유 {result.table_items:3d}(보장종목 {result.coverages:2d})  "
+                f"부칙 {provisions:2d}"
             )
 
         link_history(driver)

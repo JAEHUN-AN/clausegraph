@@ -11,6 +11,7 @@ from typing import Any
 
 from neo4j import Driver
 
+from ..law.appendix import Provision
 from ..law.exclusion_table import parse_exclusion_table
 from ..law.models import Article, TermsDocument
 from ..law.parse_cli import is_exclusion
@@ -22,6 +23,7 @@ from .schema import (
     article_uid,
     coverage_uid,
     item_uid,
+    provision_uid,
     table_item_uid,
 )
 
@@ -80,6 +82,21 @@ SET i.number = row.number,
     i.source = 'table'
 MERGE (c)-[:EXCLUDES]->(i)
 MERGE (a)-[:HAS_ITEM]->(i)
+"""
+
+_MERGE_PROVISIONS = """
+UNWIND $rows AS row
+MATCH (v:Version {effective_from: $effective_from})
+MERGE (p:Provision {uid: row.uid})
+SET p.promulgated_on = row.promulgated_on,
+    p.new_contracts_only = row.new_contracts_only,
+    p.candidate_dates = row.candidate_dates,
+    p.text = row.text
+MERGE (v)-[:HAS_PROVISION]->(p)
+FOREACH (_ IN CASE WHEN row.is_own THEN [1] ELSE [] END |
+    SET v.applies_from = coalesce(row.applies_from, v.effective_from),
+        v.applies_to_new_contracts_only = row.new_contracts_only,
+        v.provision_uid = row.uid)
 """
 
 # 같은 상품·같은 조문 번호를 시행일자 순으로 이어 붙인다.
@@ -164,6 +181,51 @@ def load_version(
         table_items=len(table_rows),
         coverages=len({row["coverage_uid"] for row in table_rows}),
     )
+
+
+def load_provisions(
+    driver: Driver,
+    effective_from: str,
+    provisions: tuple[Provision, ...],
+    *,
+    own_promulgated_on: str | None = None,
+) -> int:
+    """부칙 적용례를 그 버전에 붙인다.
+
+    부칙은 세칙의 개정 이력 전체가 딸려 오므로 그 버전 **자신의** 부칙을
+    가려내야 한다. `own_promulgated_on`(그 버전을 만든 개정의 발령일자)과
+    공포일자가 같은 것이 그것이다.
+
+    자신의 부칙이 신계약 기준이고 날짜 후보가 하나면 그 날짜를
+    `applies_from`으로 삼는다 — **세칙 시행일이 아니라 약관 적용일**이다.
+    후보가 여럿이면 단정하지 않고 시행일자를 그대로 쓴다.
+    """
+    rows = []
+    for provision in provisions:
+        is_own = (
+            own_promulgated_on is not None
+            and provision.promulgated_on == own_promulgated_on
+        )
+        applies_from = None
+        if is_own and provision.new_contracts_only and len(provision.candidate_dates) == 1:
+            applies_from = provision.candidate_dates[0].replace("-", "")
+        rows.append(
+            {
+                "uid": provision_uid(provision.promulgated_on),
+                "promulgated_on": provision.promulgated_on,
+                "new_contracts_only": provision.new_contracts_only,
+                "candidate_dates": list(provision.candidate_dates),
+                "text": provision.text,
+                "is_own": is_own,
+                "applies_from": applies_from,
+            }
+        )
+    if not rows:
+        return 0
+    with driver.session() as session:
+        for chunk in _chunks(rows):
+            session.run(_MERGE_PROVISIONS, effective_from=effective_from, rows=chunk)
+    return len(rows)
 
 
 def link_history(driver: Driver) -> None:

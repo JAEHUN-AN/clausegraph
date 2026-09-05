@@ -10,6 +10,9 @@
         상해급여와 질병급여의 사유가 다르므로 보장종목을 노드로 둔다.
     (:Article)-[:SUPERSEDES]->(:Article) 같은 상품·같은 번호의 이전 버전
     (:Version)-[:SUPERSEDES]->(:Version)
+    (:Version)-[:HAS_PROVISION]->(:Provision)
+        부칙 적용례. 세칙 시행일과 약관 적용일이 다르고, 적용 대상이
+        신계약으로 한정되는 경우가 있다 (notes/015).
 
 면책 조문에는 `:Exclusion` 라벨을 덧붙인다. 보장을 무효화하는 조항은
 따로 짚을 수 있어야 하고, 그게 이 프로젝트의 핵심이다.
@@ -35,6 +38,8 @@ CONSTRAINTS = (
     "FOR (i:Item) REQUIRE i.uid IS UNIQUE",
     "CREATE CONSTRAINT coverage_uid IF NOT EXISTS "
     "FOR (c:Coverage) REQUIRE c.uid IS UNIQUE",
+    "CREATE CONSTRAINT provision_uid IF NOT EXISTS "
+    "FOR (p:Provision) REQUIRE p.uid IS UNIQUE",
 )
 
 INDEXES = (
@@ -55,6 +60,11 @@ def item_uid(article: str, paragraph_no: int, item_no: int) -> str:
 
 def coverage_uid(article: str, coverage: str) -> str:
     return f"{article}#{coverage}"
+
+
+def provision_uid(promulgated_on: str) -> str:
+    """부칙 적용례. 공포일자로 식별한다."""
+    return f"부칙/{promulgated_on}"
 
 
 def table_item_uid(article: str, coverage: str, paragraph_no: int, item_no: int) -> str:
