@@ -1,0 +1,50 @@
+{"case_slno": 4, "label": "DENIED", "note": "협심증은 급성심근경색 정의 미해당 — 부당하다고 볼 수 없음", "batch": 1}
+{"case_slno": 9, "label": "NOT_CLAIM", "note": "고지의무 위반 계약 해지 사안", "batch": 1}
+{"case_slno": 14, "label": "DENIED", "note": "보조기 = 보상하지 않는 손해. '부당하다고 판단하기는 어려움'", "batch": 1}
+{"case_slno": 15, "label": "DENIED", "note": "'지급하도록 권고하기 어려움' — 긍정 어구 뒤 부정", "batch": 1}
+{"case_slno": 17, "label": "NOT_CLAIM", "note": "보험료 미납 계약 해지 사안", "batch": 1}
+{"case_slno": 22, "label": "NOT_CLAIM", "note": "민감정보 미동의로 처리 보류 — 지급 판정 이전 단계", "batch": 1}
+{"case_slno": 24, "label": "NOT_CLAIM", "note": "고지의무 위반 계약 해지 사안", "batch": 1}
+{"case_slno": 25, "label": "DENIED", "note": "아바스틴 주입술은 약관상 수술 아님 — '지급을 권고하기 곤란'", "batch": 1}
+{"case_slno": 34, "label": "NOT_CLAIM", "note": "만기환급금 설명의무 사안 — 보험금 아님", "batch": 1}
+{"case_slno": 46, "label": "NOT_CLAIM", "note": "기납입보험료 반환 요청 — 보험금 아님", "batch": 1}
+{"case_slno": 56, "label": "DENIED", "note": "압박고정용 재료대 = 보조기", "batch": 1}
+{"case_slno": 59, "label": "DENIED", "note": "정신장해는 입원비 지급대상 질병 아님", "batch": 1}
+{"case_slno": 61, "label": "DENIED", "note": "케모포트삽입술은 천자 — 수술비 지급대상 아님", "batch": 1}
+{"case_slno": 62, "label": "DENIED", "note": "고지의무 위반 해지 + 보험금 거절. 제목·본문 모두 보험금 부지급이 쟁점", "batch": 1}
+{"case_slno": 72, "label": "DENIED", "note": "비급여 주사료 특약 미가입", "batch": 1}
+{"case_slno": 76, "label": "DENIED", "note": "성장호르몬제 전액본인부담 = 보상하지 않는 손해", "batch": 1}
+{"case_slno": 78, "label": "NEEDS_DOCS", "note": "추가 서류 제출 요구 — 지급 여부 미확정. batch 1 판독 당시에는 라벨 체계에 이 값이 없어 NOT_CLAIM으로 적었고, 판독 메모에 '추가서류요청에 해당'이라고 남겨 두었다. 체계에 NEEDS_DOCS를 추가하며 그 메모대로 옮긴 것이지 규칙 결과를 보고 판단을 바꾼 것이 아니다.", "batch": 1}
+{"case_slno": 80, "label": "DENIED", "note": "코로나는 약관상 특정전염병 미해당", "batch": 1}
+{"case_slno": 98, "label": "NOT_CLAIM", "note": "실손 보험료 할인 적용 사안", "batch": 1}
+{"case_slno": 125, "label": "PAID", "note": "'영구적' 장해로 보아 보험금을 지급할 필요가 있다고 판단", "batch": 1}
+{"case_slno": 132, "label": "DENIED", "note": "기지급 보험금(A) 공제가 쟁점 — 다투는 부분은 부지급", "batch": 1}
+{"case_slno": 139, "label": "DENIED", "note": "입원 120일 한도 초과", "batch": 1}
+{"case_slno": 141, "label": "DENIED", "note": "관상동맥조영술은 진단 목적 — 수술 미해당", "batch": 1}
+{"case_slno": 142, "label": "DENIED", "note": "창상봉합술은 수술분류표 미포함", "batch": 1}
+{"case_slno": 143, "label": "DENIED", "note": "피부양성종양적출술은 피부이식수술 아님", "batch": 1}
+{"case_slno": 150, "label": "PAID", "note": "'지급하지 않은 업무처리는 부당하다고 판단'", "batch": 1}
+{"case_slno": 152, "label": "DENIED", "note": "성년후견인 미지정 — 청구를 받아들이지 않은 처리가 부당하지 않음", "batch": 1}
+{"case_slno": 158, "label": "DENIED", "note": "본인부담상한액 초과분은 보상대상 아님", "batch": 1}
+{"case_slno": 159, "label": "DENIED", "note": "바코패드 = 보조기", "batch": 1}
+{"case_slno": 163, "label": "DENIED", "note": "건강검진·예방접종·증명서 발급 비용", "batch": 1}
+{"case_slno": 5, "label": "DENIED", "note": "본인부담상한액 초과분은 지급 대상 아님", "batch": 2}
+{"case_slno": 7, "label": "NOT_CLAIM", "note": "고지의무 위반 계약 해지 원상복구 요청", "batch": 2}
+{"case_slno": 18, "label": "PARTIAL", "note": "2년 이내 지급사유 → 약관대로 50% 감액 지급", "batch": 2}
+{"case_slno": 27, "label": "DENIED", "note": "성년후견인 미지정 — 청구 거절이 타당. 152와 동일 성격", "batch": 2}
+{"case_slno": 37, "label": "NOT_CLAIM", "note": "기납입 보험료 반환 요청 — 보험금 아님", "batch": 2}
+{"case_slno": 48, "label": "NOT_CLAIM", "note": "보험금은 지급됨. 쟁점은 계약 해지권 행사", "batch": 2}
+{"case_slno": 63, "label": "NOT_CLAIM", "note": "기납입 보험료 반환·손해배상 요구", "batch": 2}
+{"case_slno": 71, "label": "DENIED", "note": "다초점 인공수정체 = 시력교정술, 보상하지 않는 손해", "batch": 2}
+{"case_slno": 99, "label": "NOT_CLAIM", "note": "4세대 실손 보험료 할증 사안", "batch": 2}
+{"case_slno": 113, "label": "DENIED", "note": "암진단이 제2보험기간 — 보장 대상 아님", "batch": 2}
+{"case_slno": 115, "label": "NOT_CLAIM", "note": "보험료 미납 계약 해지", "batch": 2}
+{"case_slno": 119, "label": "DENIED", "note": "당일 입원 수술보험금은 별도 보장 — 다투는 부분 부지급", "batch": 2}
+{"case_slno": 133, "label": "DENIED", "note": "가입 당시 약관 적용 — 개정 항목 소급 안 됨. 시점 축 사례", "batch": 2}
+{"case_slno": 135, "label": "PAID", "note": "가입 당시 KCD 기준 적용 의무 — '부당하다고 판단'. 시점 축 사례", "batch": 2}
+{"case_slno": 136, "label": "DENIED", "note": "퇴직으로 단체보험 피보험자 탈퇴 후 진단", "batch": 2}
+{"case_slno": 137, "label": "DENIED", "note": "코로나19는 약관상 특정전염병 미해당", "batch": 2}
+{"case_slno": 151, "label": "PAID", "note": "면책 약관 설명의무 미이행 — '부당하다고 판단'", "batch": 2}
+{"case_slno": 153, "label": "DENIED", "note": "부활 전 해지 상태에서 발생한 사고", "batch": 2}
+{"case_slno": 155, "label": "DENIED", "note": "한방 비급여 의료비는 보상하지 않음", "batch": 2}
+{"case_slno": 157, "label": "DENIED", "note": "비급여 주사료 특약 미가입", "batch": 2}
