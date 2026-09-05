@@ -88,6 +88,13 @@ def compute(
     payable = int(payable * rate)
     steps.append(f"보상비율 {rate:.0%}")
 
+    # 2-1. 통원 1회당 한도 — 연간한도와 별개로 걸린다.
+    #      비급여 특약은 "통원 1회당 20만원 이내"를 따로 정한다.
+    visit_limit = None if inpatient else rule.outpatient_visit_limit
+    if visit_limit is not None and payable > visit_limit:
+        steps.append(f"통원 1회 한도 {visit_limit:,}원으로 제한")
+        payable = visit_limit
+
     # 3. 감액기간 — 다른 요소를 적용한 뒤에 곱한다.
     if days_since_enrollment < REDUCTION_PERIOD_DAYS:
         payable = int(payable * REDUCTION_RATE)

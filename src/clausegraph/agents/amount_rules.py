@@ -47,12 +47,14 @@ class AmountRule:
     reimburse_rate: float | None
     # 연간 보험가입금액 한도(원).
     annual_limit: int | None
-    # 통원 정액 공제(원)와 비율 공제. 약관은 "1만원 또는 의료비의 20% 중
-    # 큰 금액"처럼 둘 중 큰 쪽을 쓰라고 한다.
+    # 통원 정액 공제(원)와 비율 공제. 약관은 "3만원과 보장대상 의료비의
+    # 30% 중 큰 금액"처럼 둘 중 큰 쪽을 쓰라고 한다.
     outpatient_deductible: int | None
     outpatient_deductible_rate: float | None
+    # 통원 1회(또는 1일)당 한도. 연간한도와 별개로 걸린다.
+    outpatient_visit_limit: int | None = None
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
-    source_articles: tuple[str, ...]
+    source_articles: tuple[str, ...] = ()
     note: str = ""
 
     def complete_for_inpatient(self) -> bool:
@@ -77,18 +79,30 @@ def _uid(product: str, number: str) -> str:
     return article_uid(VERIFIED_VERSION, product, number)
 
 
+# 급여 실손 — 제5조 ④ "본인부담금의 20%" -> 보상 80%,
+#             제5조 ① "합산하여 5천만원 이내",
+#             제3조 <표1> "1만원, 보장대상의료비의 20% 중 큰 금액"
+_BENEFIT_ARTICLES = (_uid(BENEFIT, "3"), _uid(BENEFIT, "5"))
+
+# 중증 비급여 — 자기부담 30% -> 보상 70%,
+#               제5조 ① "합산하여 5천만원 이내", ③ "통원 1회당 20만원 이내",
+#               제3조 <표1> "3만원과 보장대상 의료비의 30% 중 큰 금액"
+_SEVERE_ARTICLES = (_uid(SEVERE, "3"), _uid(SEVERE, "5"))
+
+# 비중증 비급여 — 자기부담 50% -> 보상 50%,
+#                 제5조 ① "합산하여 1천만원 이내", ③ "통원 1일당 20만원 이내",
+#                 제3조 <표1> "5만원과 보장대상 의료비의 50% 중 큰 금액"
+_MILD_ARTICLES = (_uid(MILD, "3"), _uid(MILD, "5"))
+
 RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=BENEFIT,
         coverage="(1)상해급여",
-        # 제5조 ④ "보상금액을 제외한 나머지 금액(… 본인부담금의 20%)" -> 보상 80%
         reimburse_rate=0.80,
-        # 제5조 ① "입원과 통원의 보상금액을 합산하여 5천만원 이내"
         annual_limit=50_000_000,
-        # <표1> "1만원 …, 보장대상의료비의 20% … 중 큰 금액"
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
-        source_articles=(_uid(BENEFIT, "3"), _uid(BENEFIT, "5")),
+        source_articles=_BENEFIT_ARTICLES,
         note="통원 공제는 의료기관 종류에 따라 더 커진다 — 최소 유형만 반영했다",
     ),
     AmountRule(
@@ -98,32 +112,56 @@ RULES: tuple[AmountRule, ...] = (
         annual_limit=50_000_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
-        source_articles=(_uid(BENEFIT, "3"), _uid(BENEFIT, "5")),
+        source_articles=_BENEFIT_ARTICLES,
         note="상해급여와 같은 구조. 한도는 보장종목별로 따로 5천만원",
     ),
     AmountRule(
         product=SEVERE,
         coverage="(1)상해비급여",
-        # 중증 비급여는 자기부담 30% -> 보상 70%
         reimburse_rate=0.70,
-        # 제5조를 읽었으나 보장종목별 한도를 이 판본에서 확정하지 못했다.
-        annual_limit=None,
-        outpatient_deductible=None,
-        outpatient_deductible_rate=None,
-        source_articles=(_uid(SEVERE, "3"),),
-        note="한도·공제 미확인 — 계산하지 않고 사람에게 넘긴다",
+        annual_limit=50_000_000,
+        outpatient_deductible=30_000,
+        outpatient_deductible_rate=0.30,
+        outpatient_visit_limit=200_000,
+        source_articles=_SEVERE_ARTICLES,
+        note="통원 연간 100회 한도는 반영하지 않았다 — 누적 횟수를 저장해야 한다",
+    ),
+    AmountRule(
+        product=SEVERE,
+        coverage="(2)질병비급여",
+        reimburse_rate=0.70,
+        annual_limit=50_000_000,
+        outpatient_deductible=30_000,
+        outpatient_deductible_rate=0.30,
+        outpatient_visit_limit=200_000,
+        source_articles=_SEVERE_ARTICLES,
+        note="상해비급여와 같은 구조",
     ),
     AmountRule(
         product=MILD,
         coverage="(1)상해비급여",
-        # 비중증 비급여는 자기부담 50% -> 보상 50%
         reimburse_rate=0.50,
-        annual_limit=None,
-        outpatient_deductible=None,
-        outpatient_deductible_rate=None,
-        source_articles=(_uid(MILD, "3"),),
-        note="한도·공제 미확인 — 계산하지 않고 사람에게 넘긴다",
+        annual_limit=10_000_000,
+        outpatient_deductible=50_000,
+        outpatient_deductible_rate=0.50,
+        outpatient_visit_limit=200_000,
+        source_articles=_MILD_ARTICLES,
+        note="통원 연간 100일 한도는 반영하지 않았다 — 누적 일수를 저장해야 한다",
     ),
+    AmountRule(
+        product=MILD,
+        coverage="(2)질병비급여",
+        reimburse_rate=0.50,
+        annual_limit=10_000_000,
+        outpatient_deductible=50_000,
+        outpatient_deductible_rate=0.50,
+        outpatient_visit_limit=200_000,
+        source_articles=_MILD_ARTICLES,
+        note="상해비급여와 같은 구조",
+    ),
+    # 3대비급여·비급여 MRI는 제3조가 항목별로 따로 한도를 정한다. 하나의
+    # 비율·한도로 요약할 수 없어 넣지 않는다 — 규칙이 없으면 계산기가
+    # 계산하지 않고 가드레일이 사람에게 넘긴다.
 )
 
 _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}

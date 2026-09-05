@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -105,12 +106,34 @@ def test_parameters_are_required_before_any_amount_is_stated() -> None:
 
 
 def test_incomplete_rule_is_not_guessed() -> None:
-    incomplete = next(rule for rule in RULES if not rule.complete_for_inpatient())
+    # 지금은 모든 규칙의 값을 약관에서 확인했다. 그래도 확인하지 못한 값이
+    # 생기면(새 판본, 새 상품) 계산하지 않아야 한다 — 그 성질을 검증한다.
+    incomplete = replace(_complete_rule(), annual_limit=None)
+    assert incomplete.complete_for_inpatient() is False
 
     result = compute(1_000_000, days_since_enrollment=800, rule=incomplete)
 
     assert result.computed is False
     assert result.source_articles == incomplete.source_articles
+
+
+def test_outpatient_visit_limit_caps_the_payout() -> None:
+    # 비급여 특약은 "통원 1회당 20만원 이내"를 연간한도와 별개로 정한다.
+    rule = next(r for r in RULES if r.outpatient_visit_limit is not None)
+
+    result = compute(10_000_000, days_since_enrollment=800, rule=rule, inpatient=False)
+
+    assert result.value == rule.outpatient_visit_limit
+    assert "통원 1회 한도" in result.basis
+
+
+def test_visit_limit_does_not_apply_to_inpatient() -> None:
+    rule = next(r for r in RULES if r.outpatient_visit_limit is not None)
+
+    result = compute(1_000_000, days_since_enrollment=800, rule=rule, inpatient=True)
+
+    assert result.value == int(1_000_000 * rule.reimburse_rate)
+    assert "통원 1회 한도" not in result.basis
 
 
 def test_inpatient_applies_only_the_rate() -> None:
