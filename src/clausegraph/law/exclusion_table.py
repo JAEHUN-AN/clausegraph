@@ -35,7 +35,7 @@ def parse_exclusion_table(article: Article, lexicon: Lexicon) -> tuple[TableExcl
                 continue
             # 표는 2열(보장종목/사항)일 때도 3열(보장종목/세부구성항목/사항)일
             # 때도 있다. 내용은 늘 마지막 열이고, 앞의 열들이 합쳐서 보장종목이다.
-            coverage = " ".join(cell.strip() for cell in row.cells[:-1] if cell.strip())
+            coverage = _coverage_label(row.cells[:-1])
             for paragraph_no, chunk in _split_paragraphs(row.cells[-1]):
                 for number, text in _split_items(chunk):
                     exclusions.append(
@@ -47,6 +47,21 @@ def parse_exclusion_table(article: Article, lexicon: Lexicon) -> tuple[TableExcl
                         )
                     )
     return tuple(exclusions)
+
+
+def _coverage_label(cells: tuple[str, ...]) -> str:
+    """보장종목 라벨.
+
+    한 행 안에 세부 구성항목별 하위 블록이 여러 개 들어 있고, 그때마다
+    보장종목 라벨이 다시 적힌다. 그대로 이으면
+    '(2)질병의료비 (2)질병의료비 (2)질병의료비 해외 해외 해외'가 된다.
+    순서를 지키면서 같은 조각을 접는다.
+    """
+    seen: dict[str, None] = {}
+    for cell in cells:
+        for token in cell.split():
+            seen.setdefault(token, None)
+    return " ".join(seen)
 
 
 def _is_header(cells: tuple[str, ...]) -> bool:

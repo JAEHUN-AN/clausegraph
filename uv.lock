@@ -288,8 +288,10 @@ graph = [
 onnx = [
     { name = "onnxruntime" },
     { name = "optimum", extra = ["onnxruntime"] },
+    { name = "transformers" },
 ]
 rag = [
+    { name = "numpy" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sentence-transformers" },
@@ -309,6 +311,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'serve'", specifier = ">=1.1" },
     { name = "neo4j", marker = "extra == 'graph'", specifier = ">=5.23" },
     { name = "neo4j", marker = "extra == 'serve'", specifier = ">=5.23" },
+    { name = "numpy", marker = "extra == 'rag'", specifier = ">=2.0" },
     { name = "onnxruntime", marker = "extra == 'onnx'", specifier = ">=1.19" },
     { name = "onnxruntime", marker = "extra == 'serve'", specifier = ">=1.19" },
     { name = "optimum", extras = ["onnxruntime"], marker = "extra == 'onnx'", specifier = ">=1.23" },
@@ -327,6 +330,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "sentence-transformers", marker = "extra == 'rag'", specifier = ">=3.0" },
     { name = "tenacity", specifier = ">=9.0" },
+    { name = "transformers", marker = "extra == 'onnx'", specifier = ">=4.40" },
     { name = "transformers", marker = "extra == 'serve'", specifier = ">=4.40" },
 ]
 provides-extras = ["graph", "rag", "onnx", "serve", "dev"]

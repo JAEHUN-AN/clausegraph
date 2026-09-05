@@ -18,11 +18,16 @@ graph = [
     "neo4j>=5.23",
 ]
 rag = [
+    "numpy>=2.0",
     "pgvector>=0.3",
     "psycopg[binary]>=3.2",
     "sentence-transformers>=3.0",
 ]
-onnx = ["onnxruntime>=1.19", "optimum[onnxruntime]>=1.23"]
+onnx = [
+    "onnxruntime>=1.19",
+    "optimum[onnxruntime]>=1.23",
+    "transformers>=4.40",
+]
 serve = [
     "onnxruntime>=1.19",
     "transformers>=4.40",

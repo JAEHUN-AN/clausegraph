@@ -11,3 +11,5 @@ models/
 *.log
 data/law/
 !data/law/manifest.json
+data/eval/
+!data/eval/exclusion_recall.json
