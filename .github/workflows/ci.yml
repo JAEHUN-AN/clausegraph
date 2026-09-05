@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: uv 설치
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 의존성
+        run: uv sync --extra dev --extra graph --extra mcp
+
+      - name: ruff
+        run: uv run ruff check src tests
+
+      - name: 테스트
+        run: uv run pytest -q
+
+# 여기서 도는 것은 린트와 단위 테스트뿐이다.
+#
+# 면책 recall 측정(notes/008)과 심사 지연 측정(notes/011)은 CI에서 돌리지
+# 않는다. 약관 전문 80만 자와 색인이 필요한데 `data/law/`는 git에서 제외돼
+# 있고(라이선스·용량), Neo4j·pgvector에 적재하는 데 수 분이 걸린다.
+#
+# 대신 그 측정들이 의존하는 규칙 — 코드 범위 파싱, 표 셀 이어붙이기, 조문
+# 구조, 가드레일 — 은 전부 단위 테스트로 고정해 뒀다. 회귀는 여기서 잡힌다.

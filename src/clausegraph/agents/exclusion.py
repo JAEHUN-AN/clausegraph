@@ -53,6 +53,17 @@ MIN_KEYWORD_LEN = 2
 # 제대로 갈린다. 지금은 확실하지 않은 히트를 사람에게 넘기는 용도라
 # 이 정도로 둔다.
 MAX_DOCUMENT_FREQUENCY = 0.016
+
+# 버전이 고정되면 면책 목록과 변별어 사전도 고정이다.
+_EXCLUSION_CACHE: dict[tuple[str, str], list[dict[str, str]]] = {}
+_TOKEN_CACHE: dict[str, frozenset[str]] = {}
+
+
+def clear_caches() -> None:
+    """약관을 다시 적재한 뒤 부른다. 테스트에서도 쓴다."""
+    _EXCLUSION_CACHE.clear()
+    _TOKEN_CACHE.clear()
+    _distinctive_tokens_for.cache_clear()
 # 조항 앞머리의 상품·조문 이름은 표현 일치에서 빼야 한다 — 아무 청구에나 걸린다.
 _PREFIX_RE = re.compile(r"^.*?제\d+조\([^)]*\)\s*")
 _TOKEN_RE = re.compile(r"[가-힣]{2,}")
@@ -67,11 +78,21 @@ class ExclusionHit:
 
 
 def enumerate_exclusions(driver: Driver, product: str, version: str) -> list[dict[str, str]]:
-    """그 상품·그 버전의 면책 사유를 전부. 유사도를 쓰지 않는다."""
-    with driver.session() as session:
-        return [dict(record) for record in session.run(
-            _ENUMERATE, product=product, version=version
-        )]
+    """그 상품·그 버전의 면책 사유를 전부. 유사도를 쓰지 않는다.
+
+    버전이 고정되면 면책 목록은 바뀌지 않는다. 청구마다 다시 긁어 올 이유가
+    없어 (상품, 버전)으로 캐시한다.
+    """
+    cache_key = (product, version)
+    cached = _EXCLUSION_CACHE.get(cache_key)
+    if cached is None:
+        with driver.session() as session:
+            cached = [
+                dict(record)
+                for record in session.run(_ENUMERATE, product=product, version=version)
+            ]
+        _EXCLUSION_CACHE[cache_key] = cached
+    return cached
 
 
 def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHit], int]:
@@ -130,12 +151,18 @@ def _distinctive_tokens_for(version: str, corpus: tuple[str, ...]) -> frozenset[
 def _distinctive_tokens(driver: Driver, version: str) -> frozenset[str]:
     """약관 전체를 기준으로 변별력 있는 낱말만 남긴다.
 
-    버전마다 한 번만 센다 — 조문 450개를 매 청구마다 훑을 이유가 없다.
+    **조회까지 캐시해야 한다.** 처음에는 계산만 캐시했는데, 그래도 청구마다
+    조문 452개를 Neo4j에서 다시 긁어 오느라 면책검증이 전체 지연의 73%를
+    먹었다(notes/011). 버전이 고정되면 코퍼스도 고정이다.
     """
-    with driver.session() as session:
-        records = session.run(_ALL_ARTICLE_TEXTS, version=version)
-        corpus = tuple(record["text"] for record in records)
-    return _distinctive_tokens_for(version, corpus)
+    cached = _TOKEN_CACHE.get(version)
+    if cached is None:
+        with driver.session() as session:
+            records = session.run(_ALL_ARTICLE_TEXTS, version=version)
+            corpus = tuple(record["text"] for record in records)
+        cached = _distinctive_tokens_for(version, corpus)
+        _TOKEN_CACHE[version] = cached
+    return cached
 
 
 def _quote(text: str) -> str:

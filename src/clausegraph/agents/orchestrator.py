@@ -17,6 +17,7 @@ from datetime import date
 
 from neo4j import Driver
 
+from ..observability import REGISTRY
 from . import amount as amount_agent
 from . import guardrails
 from .coverage import find_coverage, resolve_version
@@ -47,6 +48,7 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
         )
     )
     if version is None:
+        REGISTRY.increment("needs_docs:버전 없음")
         return _finalize(
             claim, Decision.NEEDS_DOCS, "가입 시점의 약관을 특정하지 못했다",
             (), None, steps, amount_computed=False, uncertain=False, masked=masked,
@@ -63,6 +65,9 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
         )
     )
     if not coverage:
+        # 가입 시점에 그 상품이 없던 경우가 대부분이다 — 실손 특별약관1/2는
+        # 2026-05-06에 생겼다. 거절이 맞는 동작이고, 왜 거절했는지 센다.
+        REGISTRY.increment("needs_docs:그 시점에 상품 없음")
         return _finalize(
             claim, Decision.NEEDS_DOCS, f"{claim.product}의 보장 조항을 찾지 못했다",
             (), version, steps, amount_computed=False, uncertain=False, masked=masked,
@@ -145,6 +150,9 @@ def _finalize(
         elapsed_ms=(time.perf_counter() - started) * 1000,
         evidence=final.evidence[:MAX_EVIDENCE],
     )
+    REGISTRY.increment(f"decision:{final.decision}")
+    for name in final.guardrails:
+        REGISTRY.increment(f"guardrail:{name}")
     return final.model_copy(update={"steps": (*final.steps, verdict)})
 
 
@@ -158,6 +166,7 @@ def _timed(name: str, run: Callable):
     started = time.perf_counter()
     value = run()
     elapsed = (time.perf_counter() - started) * 1000
+    REGISTRY.record(name, elapsed)
 
     def build(*, ok: bool, summary: str, evidence: tuple = (), detail: dict | None = None):
         return StepResult(
