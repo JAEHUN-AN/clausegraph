@@ -29,6 +29,7 @@ from ..agents.extract import extract_claim
 from ..agents.kcd import matches
 from ..agents.models import Adjudication
 from ..agents.orchestrator import adjudicate
+from ..agents.quote import prose_quote
 from ..agents.terminology import lookup
 from ..graph.schema import OPEN_ENDED
 
@@ -381,8 +382,12 @@ def _parse_date(value: str) -> date | None:
 
 
 def _shorten(text: str) -> str:
-    flat = " ".join(text.split())
-    return flat[:QUOTE_CHARS] + ("…" if len(flat) > QUOTE_CHARS else "")
+    """도구가 돌려줄 인용문. 심사 에이전트와 같은 규칙을 쓴다.
+
+    표 테두리로 인용 예산을 채우지 않는다 — 같은 문장을 사람이 읽든
+    모델이 읽든 근거로 쓸 수 있어야 한다(notes/021).
+    """
+    return prose_quote(text, QUOTE_CHARS)
 
 
 def main() -> None:

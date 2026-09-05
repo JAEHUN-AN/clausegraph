@@ -23,6 +23,7 @@ from neo4j import Driver
 
 from ..law.appendix import Provision
 from .models import Evidence
+from .quote import prose_quote
 
 _VERSION_ROWS = """
 MATCH (v:Version)
@@ -125,7 +126,7 @@ def find_coverage(driver: Driver, product: str, version: str) -> tuple[Evidence,
                 product=product,
                 article_number=record["number"],
                 article_title=record["title"],
-                quote=record["text"][:QUOTE_CHARS].strip(),
+                quote=prose_quote(record["text"], QUOTE_CHARS),
                 role="coverage",
             )
             for record in records

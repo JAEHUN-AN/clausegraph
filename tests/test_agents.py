@@ -14,6 +14,7 @@ from clausegraph.agents.exclusion import _quote
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
 from clausegraph.agents.models import Adjudication, Decision, Evidence
+from clausegraph.agents.quote import TABLE_MARKER, prose_quote
 
 PRODUCT = "실손의료보험 특별약관1(중증 비급여 실손의료비)"
 ENROLLED = date(2026, 7, 1)
@@ -118,6 +119,41 @@ def test_quote_is_not_a_fragment() -> None:
         quote = _quote(text)
         assert not quote.startswith(("에 ", "을 ", "를 ", "은 ", "는 ", "의 "))
         assert len(quote) >= min(len(text.strip()), 7)
+
+
+# 표가 곧 내용인 조문. 앞에서 그냥 자르면 인용 예산이 테두리로 채워진다.
+_ARTICLE_WITH_TABLE = (
+    "회사가 이 계약의 보험기간 중 보장종목별로 각각 보상하거나 공제하는 내용은 "
+    "다음과 같습니다.\n\n┏━━━━┳━━━━━━━━━━━━━┓\n┃보장종목┃보상금액┃"
+)
+
+
+def test_quote_stops_where_the_table_starts() -> None:
+    quote = prose_quote(_ARTICLE_WITH_TABLE, 160)
+
+    assert quote.endswith(TABLE_MARKER)
+    assert "┏" not in quote
+    assert "━" not in quote
+    assert quote.startswith("회사가 이 계약의 보험기간 중")
+
+
+def test_quote_says_there_is_a_table_instead_of_drawing_it() -> None:
+    # 표 앞에 알맹이가 없는 조문. 없는 문장을 만들지 않고 표시만 붙인다.
+    quote = prose_quote("<표1> 통원항목별 공제금액\n┌─────┬────┐", 160)
+
+    assert quote == "<표1> 통원항목별 공제금액" + TABLE_MARKER
+
+
+def test_quote_leaves_plain_prose_alone() -> None:
+    for text in ("정신 및 행동장애(F04∼F99)", "비만(E66)"):
+        assert prose_quote(text, 180) == text
+
+
+def test_quote_marks_truncation() -> None:
+    quote = prose_quote("가" * 300, 60)
+
+    assert len(quote) == 61
+    assert quote.endswith("…")
 
 
 # --- 금액산정 ---

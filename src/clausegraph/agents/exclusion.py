@@ -27,6 +27,7 @@ from neo4j import Driver
 
 from .kcd import matches
 from .models import Claim, Evidence
+from .quote import prose_quote
 
 _ALL_ARTICLE_TEXTS = """
 MATCH (v:Version {effective_from: $version})<-[:IN_VERSION]-(a:Article)
@@ -164,7 +165,7 @@ def _distinctive_tokens(driver: Driver, version: str) -> frozenset[str]:
 
 
 def _quote(text: str) -> str:
-    r"""근거로 보여 줄 인용문.
+    r"""근거로 보여 줄 인용문. 만드는 규칙은 `quote.prose_quote`에 있다.
 
     **여기서 앞머리를 잘라 내지 않는다.** 한때 `^.*?제\d+조\([^)]*\)\s*`로
     조문 제목을 떼려 했는데, 조문도 호도 제목으로 시작하지 않는다(파서가
@@ -180,7 +181,7 @@ def _quote(text: str) -> str:
     것이다.** 인용문이 이 시스템의 산출물인데 그 산출물이 정반대를 말했다
     (notes/020).
     """
-    return text.strip()[:QUOTE_CHARS]
+    return prose_quote(text, QUOTE_CHARS)
 
 
 def _distinctive_overlap(clause: str, haystack: str, distinctive: frozenset[str]) -> str | None:
