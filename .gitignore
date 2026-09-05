@@ -9,3 +9,5 @@ data/cache/
 models/
 *.hwp
 *.log
+data/law/
+!data/law/manifest.json
