@@ -40,6 +40,44 @@ def test_tools_taking_an_enrollment_date_say_why_it_matters(tools) -> None:
         assert "enrolled_on" in tools[name].input_schema["properties"]
 
 
+def test_every_tool_taking_a_date_also_takes_a_product() -> None:
+    # 부칙이 정한 약관 적용일은 상품마다 다르다. 상품 없이 버전을 정하면
+    # 2026-05-06~06-06 가입자에게 실손이 아닌 상품까지 새 약관을 한 달
+    # 일찍 들이댄다 — 가입일x상품 1,472쌍 중 32쌍(2.2%)이 어긋났다.
+    tool_map = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
+    for name in (
+        "resolve_terms_version",
+        "list_exclusions",
+        "check_diagnosis_codes",
+        "screen_exclusions",
+        "adjudicate_claim",
+    ):
+        properties = tool_map[name].input_schema["properties"]
+        assert "product" in properties, name
+
+
+def test_version_resolution_is_the_one_the_agents_use() -> None:
+    # 도구와 심사 에이전트가 서로 다른 버전을 고르면 같은 청구에 두 답이 나온다.
+    import inspect
+
+    from clausegraph.agents import coverage
+    from clausegraph.mcp_server import server
+
+    source = inspect.getsource(server._version_of)
+
+    assert "resolve_version" in source
+    assert server.resolve_version is coverage.resolve_version
+
+
+def test_product_is_optional_only_where_the_answer_can_be_generic(tools) -> None:
+    # resolve_terms_version만 상품 없이 부를 수 있다. 그때는 답이 상품에
+    # 따라 달라질 수 있다는 것을 함께 말해야 한다.
+    required = set(tools["resolve_terms_version"].input_schema.get("required", []))
+
+    assert "product" not in required
+    assert "상품마다 다르다" in tools["resolve_terms_version"].description
+
+
 def test_exclusion_tool_says_it_enumerates(tools) -> None:
     # 골라 주는 도구로 오해하면 모델이 결과를 잘라 읽는다.
     assert "전부" in tools["list_exclusions"].description

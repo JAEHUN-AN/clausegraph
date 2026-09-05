@@ -24,6 +24,7 @@ from datetime import date
 from mcp.server.mcpserver import MCPServer
 from neo4j import GraphDatabase
 
+from ..agents.coverage import resolve_version
 from ..agents.exclusion import enumerate_exclusions, screen
 from ..agents.extract import extract_claim
 from ..agents.kcd import matches
@@ -130,17 +131,25 @@ def list_products() -> str:
 
 
 @mcp.tool()
-def resolve_terms_version(enrolled_on: str) -> str:
+def resolve_terms_version(enrolled_on: str, product: str = "") -> str:
     """가입일에 적용되던 약관 버전을 찾는다. `enrolled_on`은 YYYY-MM-DD.
 
     조항을 인용하기 **전에** 호출한다. 보험은 가입 당시 약관이 적용되므로,
     버전을 정하지 않고 조문을 읽으면 그 계약에 없는 조항을 들이댈 수 있다.
     2026-05-06 개편으로 실손 특별약관이 중증/비중증 둘로 갈렸고, 그 전에
     가입한 사람의 '실손 특별약관'은 지금 문서에 없는 상품이다.
+
+    **`product`를 함께 주는 것이 맞다.** 부칙이 약관의 적용일을 따로 정하고
+    그 적용일이 상품마다 다르다. 같은 날 가입해도 실손은 새 약관, 생명·
+    질병상해는 옛 약관인 구간이 있다. 상품을 주지 않으면 시행일자만 보고
+    답하며, 그 답이 상품에 따라 달라질 수 있다고 함께 알린다.
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
         return f"가입일 형식이 올바르지 않다: {enrolled_on!r} (YYYY-MM-DD)"
+
+    if product:
+        return _version_for_product(parsed, enrolled_on, product)
 
     with driver().session() as session:
         record = session.run(_VERSION_AT, on_date=parsed.strftime("%Y%m%d")).single()
@@ -154,7 +163,9 @@ def resolve_terms_version(enrolled_on: str) -> str:
     end = "현재" if record["effective_to"] == OPEN_ENDED else record["effective_to"]
     lines = [
         f"가입일 {enrolled_on} -> 적용 약관 {record['effective_from']} ~ {end} "
-        f"(조문 {record['article_count']}개)"
+        f"(조문 {record['article_count']}개)",
+        "이 답은 세칙 시행일자만 본 것이다. 부칙이 정한 약관 적용일은 "
+        "상품마다 다르므로, 상품이 정해지면 product를 주고 다시 부를 것.",
     ]
 
     with driver().session() as session:
@@ -187,9 +198,9 @@ def list_exclusions(product: str, enrolled_on: str) -> str:
     if parsed is None:
         return f"가입일 형식이 올바르지 않다: {enrolled_on!r} (YYYY-MM-DD)"
 
-    version = _version_of(parsed)
+    version = _version_of(parsed, product)
     if version is None:
-        return f"가입일 {enrolled_on}에 적용되던 약관을 찾지 못했다."
+        return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
     rows = enumerate_exclusions(driver(), product, version)
     if not rows:
@@ -223,9 +234,9 @@ def check_diagnosis_codes(product: str, enrolled_on: str, codes: str) -> str:
     if parsed is None:
         return f"가입일 형식이 올바르지 않다: {enrolled_on!r} (YYYY-MM-DD)"
 
-    version = _version_of(parsed)
+    version = _version_of(parsed, product)
     if version is None:
-        return f"가입일 {enrolled_on}에 적용되던 약관을 찾지 못했다."
+        return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
     wanted = tuple(code.strip().upper() for code in codes.split(",") if code.strip())
     if not wanted:
@@ -297,9 +308,9 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
     if parsed is None:
         return f"가입일 형식이 올바르지 않다: {enrolled_on!r} (YYYY-MM-DD)"
 
-    version = _version_of(parsed)
+    version = _version_of(parsed, product)
     if version is None:
-        return f"가입일 {enrolled_on}에 적용되던 약관을 찾지 못했다."
+        return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
     claim = extract_claim("MCP", product, parsed, narrative, enrich=lookup)
     hits, considered = screen(driver(), claim, version)
@@ -318,6 +329,14 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
                 f"    제{hit.evidence.article_number}조 {_shorten(hit.evidence.quote)}"
             )
             lines.append(f"    근거 {hit.evidence.node_uid}")
+            # 이 면책의 '다만' 단서가 가리키는 조문. 면책에 걸렸다는 말만
+            # 전하면 절반만 답한 것이다 — 예외가 다시 보상을 열 수 있다.
+            for exception in hit.exceptions:
+                lines.append(
+                    f"    >>> 예외: 제{exception.article_number}조"
+                    f"({exception.article_title}) {_shorten(exception.quote)}"
+                )
+                lines.append(f"        근거 {exception.node_uid}")
     return "\n".join(lines)
 
 
@@ -366,12 +385,45 @@ def _render(result: Adjudication, codes: tuple[str, ...]) -> str:
     return "\n".join(lines)
 
 
-def _version_of(enrolled_on: date) -> str | None:
+def _version_for_product(parsed: date, enrolled_on: str, product: str) -> str:
+    """상품을 아는 경우의 답. 부칙 적용일까지 반영한다."""
+    version = _version_of(parsed, product)
+    if version is None:
+        return (
+            f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 수집 범위에서 "
+            "찾지 못했다. list_products로 수집 범위를 확인하고, 범위 밖이면 "
+            "판정할 수 없음을 알려야 한다."
+        )
+    plain = None
     with driver().session() as session:
-        record = session.run(
-            _VERSION_AT, on_date=enrolled_on.strftime("%Y%m%d")
-        ).single()
-    return record["effective_from"] if record else None
+        record = session.run(_VERSION_AT, on_date=parsed.strftime("%Y%m%d")).single()
+        if record is not None:
+            plain = record["effective_from"]
+
+    lines = [f"가입일 {enrolled_on} / {product} -> 적용 약관 {version}"]
+    if plain is not None and plain != version:
+        lines.append(
+            f"주의: 세칙 시행일자로만 보면 {plain}이지만, 부칙이 이 상품의 "
+            f"약관 적용일을 따로 정해 {version}이 적용된다."
+        )
+    return "\n".join(lines)
+
+
+def _version_of(enrolled_on: date, product: str) -> str | None:
+    """가입일에 **그 상품에** 적용되던 약관 버전.
+
+    시행일자만 보고 고르면 안 된다. 부칙이 약관의 적용일을 따로 정하고
+    그 적용일이 상품마다 다르다(notes/016).
+
+        2026-05-06 개정의 부칙:
+        "[별표15] 표준약관(개인실손의료보험은 제외한다) 개정내용은
+         2026년 6월 6일 이후 체결되는 보험계약부터 적용한다"
+
+    상품을 무시하면 2026-05-06 ~ 06-06 가입자에게 실손이 아닌 상품까지
+    새 약관을 한 달 일찍 들이댄다. 실측으로 가입일×상품 1,472쌍 중 32쌍
+    (2.2%)이 어긋났다 — 심사 에이전트와 MCP 도구가 서로 다른 답을 냈다.
+    """
+    return resolve_version(driver(), enrolled_on, product)
 
 
 def _parse_date(value: str) -> date | None:
