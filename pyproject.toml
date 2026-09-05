@@ -21,6 +21,9 @@ rag = [
     "sentence-transformers>=3.0",
 ]
 onnx = ["onnxruntime>=1.19", "optimum[onnxruntime]>=1.23"]
+# 표준약관은 API가 텍스트를 주지 않고 HWP 첨부만 준다 (notes/003).
+# pyhwp가 six를 의존성에 선언하지 않아 함께 적는다.
+hwp = ["pyhwp>=0.1b15", "six>=1.16"]
 serve = [
     "onnxruntime>=1.19",
     "transformers>=4.40",
