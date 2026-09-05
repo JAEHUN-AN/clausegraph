@@ -6,7 +6,8 @@ import pytest
 
 from clausegraph.kcd.index import (
     EXCLUDED_CHAPTERS,
-    MAX_CATEGORIES_PER_KEY,
+    MAX_CATEGORIES_PER_FULL_KEY,
+    MAX_CATEGORIES_PER_TAIL_KEY,
     Disease,
     KcdIndex,
     category_of,
@@ -69,26 +70,35 @@ def test_existence_check_alone_cannot_catch_a_wrong_chapter() -> None:
 
 
 def test_modifier_is_stripped_into_an_extra_key() -> None:
-    keys = term_keys("상세불명의 급성 편도염")
+    full, tails = term_keys("상세불명의 급성 편도염")
 
-    assert "상세불명의 급성 편도염" in keys
-    assert "급성 편도염" in keys
-    assert "편도염" in keys
+    assert "상세불명의 급성 편도염" in full
+    assert "급성 편도염" in full
+    assert "편도염" in tails
+
+
+def test_short_tail_is_not_indexed() -> None:
+    # 2글자 tail은 한국어에서 너무 흔하다 — '수술'·'이상'·'장애'.
+    _, tails = term_keys("분만힘의 이상")
+
+    assert tails == []
 
 
 def test_parenthetical_is_dropped() -> None:
-    keys = term_keys("추간판 장애에서의 신경근 압박(M50-M51)")
+    full, tails = term_keys("추간판 장애에서의 신경근 압박(M50-M51)")
 
-    assert all("(" not in key for key in keys)
+    assert all("(" not in key for key in [*full, *tails])
 
 
 def test_empty_name_yields_no_keys() -> None:
-    assert term_keys("   ") == []
+    assert term_keys("   ") == ([], [])
 
 
 def test_one_character_key_is_dropped() -> None:
     # '염' 하나로는 수천 개가 걸린다.
-    assert all(len(key) >= 2 for key in term_keys("암"))
+    full, tails = term_keys("암")
+
+    assert all(len(key) >= 2 for key in [*full, *tails])
 
 
 # --- 색인 ---
@@ -107,11 +117,25 @@ def test_everyday_word_is_translated_before_lookup() -> None:
     assert index.lookup("충치가 심해 임플란트를 했습니다") == ("K02",)
 
 
-def test_key_pointing_at_too_many_categories_is_dropped() -> None:
-    rows = [(f"A{index:02d}", "흔한염") for index in range(MAX_CATEGORIES_PER_KEY + 2)]
+def test_full_key_pointing_at_too_many_categories_is_dropped() -> None:
+    rows = [
+        (f"A{number:02d}", "흔한염") for number in range(MAX_CATEGORIES_PER_FULL_KEY + 2)
+    ]
     index = _index(*rows)
 
     assert index.lookup("흔한염 진단") == ()
+
+
+def test_tail_key_limit_is_stricter_than_full_key_limit() -> None:
+    # tail은 최대 609개 분류를 가리킬 수 있어 훨씬 엄하게 잡는다.
+    assert MAX_CATEGORIES_PER_TAIL_KEY < MAX_CATEGORIES_PER_FULL_KEY
+
+
+def test_longer_key_suppresses_its_substring() -> None:
+    # `복사의 골절`이 맞았는데 `골절`까지 누적하면 M·P·S·T가 섞인다.
+    index = _index(("S82", "복사의 골절"), ("M84", "병적 골절"))
+
+    assert index.lookup("복사의 골절 진단") == ("S82",)
 
 
 def test_non_diagnosis_chapters_are_not_indexed() -> None:

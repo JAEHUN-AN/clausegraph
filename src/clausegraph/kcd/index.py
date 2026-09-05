@@ -40,11 +40,21 @@ NAME_COLUMN = "한글명"
 ENGLISH_COLUMN = "영문명"
 COMPLETE_COLUMN = "완전코드구분"
 
-# 열쇠 하나가 여러 코드를 가리키는 것은 정상이다 — '우울증'은 F32·F33에
-# 걸친다. 그래서 세분류를 **3자리로 묶은 뒤** 그 개수를 제한한다. 세분류
-# 그대로 셌을 때는 흔한 병명이 전부 버려져 희귀 조합만 남았다(notes/013).
-MAX_CATEGORIES_PER_KEY = 8
+# 열쇠를 두 종류로 나눠 다르게 다룬다. 실측하면 성질이 전혀 다르다.
+#
+#   전체 병명 열쇠  24,463개  분류 수 중위 1, p95 1, 최대 10
+#   tail 열쇠        2,923개  분류 수 중위 1, p95 6, 최대 609 ('장애'=183)
+#
+# 전체 병명은 본래 정확하다. 오염원은 tail이다 — `분만힘의 이상`에서 뽑은
+# `이상`이 K00·K07·O62를 끌어와 선천성 뇌질환 청구에 치과치료 면책을
+# 발동시켰다. 2글자 tail(`수술`·`이상`·`장애`)은 한국어에서 너무 흔하다.
+#
+# 이 값으로 오발동이 4건에서 0건이 됐다. 적중은 6/8에서 5/8로 하나 줄지만,
+# 오발동은 곧 잘못된 부지급이고 놓침은 지급 쪽으로 기울므로 이 거래가 맞다.
+MAX_CATEGORIES_PER_FULL_KEY = 10
+MAX_CATEGORIES_PER_TAIL_KEY = 3
 MIN_KEY_LEN = 2
+MIN_TAIL_KEY_LEN = 3
 
 # 일상어 -> KCD 공식 표기.
 #
@@ -139,11 +149,18 @@ class KcdIndex:
                 text = f"{text} {official}"
 
         found: list[str] = []
+        matched: list[str] = []
         for term in self._terms:
-            if term in text:
-                for code in self._by_term[term]:
-                    if code not in found:
-                        found.append(code)
+            if term not in text:
+                continue
+            # 이미 맞은 더 긴 열쇠의 부분 문자열이면 건너뛴다 —
+            # `복사의 골절`이 맞았는데 `골절`까지 누적하면 M·P·S·T가 섞인다.
+            if any(term in longer for longer in matched):
+                continue
+            matched.append(term)
+            for code in self._by_term[term]:
+                if code not in found:
+                    found.append(code)
         return tuple(found)
 
 
@@ -166,26 +183,31 @@ def load_index(csv_path: Path = DEFAULT_CSV) -> KcdIndex:
     return KcdIndex([disease for disease in diseases if disease.code])
 
 
-def term_keys(name: str) -> list[str]:
-    """병명에서 색인할 열쇠들을 만든다.
+def term_keys(name: str) -> tuple[list[str], list[str]]:
+    """병명에서 색인할 열쇠들을 만든다. (전체 병명 열쇠, tail 열쇠).
 
-    `상세불명의 급성 편도염` -> ['상세불명의 급성 편도염', '급성 편도염', '편도염']
+    `상세불명의 급성 편도염` -> (['상세불명의 급성 편도염', '급성 편도염'], ['편도염'])
+
+    tail을 따로 돌려주는 이유는 상한이 다르기 때문이다. 전체 병명은
+    정확하지만 tail은 흔한 낱말이 되기 쉽다.
     """
     cleaned = _WS_RE.sub(" ", _TRAILING_RE.sub("", name)).strip()
     if not cleaned:
-        return []
+        return [], []
 
-    keys = [cleaned]
+    full = [cleaned]
     stripped = _MODIFIER_RE.sub("", cleaned).strip()
     if stripped and stripped != cleaned:
-        keys.append(stripped)
+        full.append(stripped)
 
-    # 마지막 낱말만 남긴 형태도 넣는다 — 청구서는 대개 그렇게 쓴다.
+    # 마지막 낱말만 남긴 형태 — 청구서는 대개 그렇게 쓴다.
     tail = stripped.split(" ")[-1] if stripped else ""
-    if tail and tail not in keys:
-        keys.append(tail)
-
-    return [key for key in keys if len(key) >= MIN_KEY_LEN]
+    tails = (
+        [tail]
+        if tail and tail not in full and len(tail) >= MIN_TAIL_KEY_LEN
+        else []
+    )
+    return [key for key in full if len(key) >= MIN_KEY_LEN], tails
 
 
 def category_of(code: str) -> str:
@@ -198,17 +220,28 @@ def category_of(code: str) -> str:
 
 
 def _build_term_index(diseases: list[Disease]) -> dict[str, tuple[str, ...]]:
-    buckets: dict[str, list[str]] = defaultdict(list)
+    full_buckets: dict[str, list[str]] = defaultdict(list)
+    tail_buckets: dict[str, list[str]] = defaultdict(list)
+
     for disease in diseases:
         category = category_of(disease.code)
         if not category or category[0] in EXCLUDED_CHAPTERS:
             continue
-        for key in term_keys(disease.name):
-            if category not in buckets[key]:
-                buckets[key].append(category)
+        full_keys, tail_keys = term_keys(disease.name)
+        for key in full_keys:
+            if category not in full_buckets[key]:
+                full_buckets[key].append(category)
+        for key in tail_keys:
+            if category not in tail_buckets[key]:
+                tail_buckets[key].append(category)
 
-    return {
+    index = {
         key: tuple(categories)
-        for key, categories in buckets.items()
-        if len(categories) <= MAX_CATEGORIES_PER_KEY
+        for key, categories in full_buckets.items()
+        if len(categories) <= MAX_CATEGORIES_PER_FULL_KEY
     }
+    # 전체 병명 열쇠가 이미 있으면 tail로 덮지 않는다.
+    for key, categories in tail_buckets.items():
+        if key not in index and len(categories) <= MAX_CATEGORIES_PER_TAIL_KEY:
+            index[key] = tuple(categories)
+    return index
