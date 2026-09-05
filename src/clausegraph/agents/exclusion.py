@@ -38,8 +38,13 @@ _ENUMERATE = """
 MATCH (v:Version {effective_from: $version})<-[:IN_VERSION]-(a:Article:Exclusion)
 MATCH (a)-[:OF_PRODUCT]->(p:Product {name: $product})
 MATCH (a)-[:HAS_ITEM]->(i:Item)
+// 면책의 예외가 가리키는 조문. '다만 …는 제3조에 따라 보상합니다' 꼴이다.
+OPTIONAL MATCH (i)-[:REFERS_TO {in_proviso: true}]->(x:Article)
 RETURN i.uid AS node_uid, a.number AS number, a.title AS title,
-       i.text AS text, i.coverage AS coverage
+       i.text AS text, i.coverage AS coverage,
+       collect(DISTINCT {
+         uid: x.uid, number: x.number, title: x.title, text: x.text
+       }) AS exceptions
 """
 
 QUOTE_CHARS = 180
@@ -74,6 +79,9 @@ class ExclusionHit:
     reason: str
     certain: bool
     matched_codes: tuple[str, ...] = ()
+    # 이 면책의 '다만' 단서가 가리키는 조문. 면책에 걸렸다는 말만 하고
+    # 끝내면 청구인에게는 절반만 답한 것이다 — 예외가 있으면 함께 낸다.
+    exceptions: tuple[Evidence, ...] = ()
 
 
 def enumerate_exclusions(driver: Driver, product: str, version: str) -> list[dict[str, str]]:
@@ -103,6 +111,7 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
     hits: list[ExclusionHit] = []
     for candidate in candidates:
         text = candidate["text"]
+        exceptions = _exception_evidence(candidate, claim.product)
         evidence = Evidence(
             node_uid=candidate["node_uid"],
             product=claim.product,
@@ -120,6 +129,7 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
                     reason=f"진단코드 {', '.join(matched)}가 약관이 정한 면책 범위에 든다",
                     certain=True,
                     matched_codes=matched,
+                    exceptions=exceptions,
                 )
             )
             continue
@@ -131,9 +141,33 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
                     evidence=evidence,
                     reason=f"청구 내용에 '{keyword}'가 나타난다 — 사람 확인 필요",
                     certain=False,
+                    exceptions=exceptions,
                 )
             )
     return hits, len(candidates)
+
+
+def _exception_evidence(
+    candidate: dict[str, object], product: str
+) -> tuple[Evidence, ...]:
+    """면책의 '다만' 단서가 가리키는 조문을 근거로 만든다.
+
+    참조는 **같은 판본·같은 상품** 안에서만 이어져 있다(notes/022). 그래서
+    여기서 버전을 다시 확인하지 않는다 — 엣지 자체가 그 보증이다.
+    """
+    rows = candidate.get("exceptions") or []
+    return tuple(
+        Evidence(
+            node_uid=str(row["uid"]),
+            product=product,
+            article_number=str(row["number"]),
+            article_title=str(row["title"]),
+            quote=prose_quote(str(row["text"]), QUOTE_CHARS),
+            role="exception",
+        )
+        for row in rows
+        if isinstance(row, dict) and row.get("uid")
+    )
 
 
 @lru_cache(maxsize=8)

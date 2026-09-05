@@ -86,6 +86,15 @@ SCENARIOS = (
         "2026.8.25 급성 기관지염(J20)으로 통원치료를 받았습니다."
         " 500,000원 청구합니다.",
     ),
+    # 면책에 걸리지만 그 면책의 '다만' 단서가 보상 조문을 가리키는 경우.
+    # 근거에 [exception]으로 함께 나온다(notes/022).
+    (
+        "CLM-009",
+        BENEFIT,
+        date(2025, 4, 1),
+        "2026.8.1 교통사고로 3일간 입원했습니다. 자동차보험에서 치료관계비를 일부"
+        " 받았고 본인부담의료비 800,000원을 청구합니다.",
+    ),
 )
 
 
@@ -102,7 +111,7 @@ def show(result: Adjudication) -> None:
         print(f"   {mark} {step.step:18s} {step.elapsed_ms:7.1f}ms  {step.summary}")
     if result.evidence:
         print("  --- 근거 ---")
-        for item in result.evidence[:3]:
+        for item in result.evidence[:5]:
             print(f"   [{item.role}] 제{item.article_number}조({item.article_title})")
             print(f"       {item.quote[:96]}")
 

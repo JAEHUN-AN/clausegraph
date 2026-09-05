@@ -8,6 +8,11 @@
     (:Article)-[:HAS_COVERAGE]->(:Coverage)-[:EXCLUDES]->(:Item)
         실손 계열은 면책을 보장종목별 표로 적는다. 같은 조문 안에서도
         상해급여와 질병급여의 사유가 다르므로 보장종목을 노드로 둔다.
+    (:Article|:Item)-[:REFERS_TO {in_proviso}]->(:Article)
+        조문 간 참조. 같은 판본·같은 상품 안에서만 잇는다 — 같은 '제3조'가
+        판본 4개 × 상품 16개에 흩어져 있으므로 번호만으로는 못 잇는다.
+        `in_proviso`는 그 참조가 '다만' 뒤에 있다는 뜻이다. 면책의 예외가
+        보상 조문을 가리키는 자리가 여기다 (notes/022).
     (:Article)-[:SUPERSEDES]->(:Article) 같은 상품·같은 번호의 이전 버전
     (:Version)-[:SUPERSEDES]->(:Version)
     (:Version)-[:HAS_PROVISION]->(:Provision)

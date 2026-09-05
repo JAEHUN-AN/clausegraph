@@ -47,7 +47,14 @@ def run(data_dir: Path) -> int:
         print(f"적재 대상 {len(versions)}개 버전\n")
 
         lexicon = Lexicon.from_terms_dir(data_dir / TERMS_DIRNAME)
-        totals = {"articles": 0, "items": 0, "exclusions": 0, "table_items": 0, "provisions": 0}
+        totals = {
+            "articles": 0,
+            "items": 0,
+            "exclusions": 0,
+            "table_items": 0,
+            "provisions": 0,
+            "references": 0,
+        }
         for version in versions:
             doc = parse_file(data_dir / TERMS_DIRNAME / version["file"])
             result = load_version(
@@ -62,6 +69,7 @@ def run(data_dir: Path) -> int:
             totals["items"] += result.items
             totals["exclusions"] += result.exclusions
             totals["table_items"] += result.table_items
+            totals["references"] += result.references
 
             # 부칙 적용례 — 세칙 시행일과 약관 적용일이 다를 수 있다.
             provisions = 0
@@ -88,7 +96,8 @@ def run(data_dir: Path) -> int:
                 f"  {version['effective_from']} ~ {end}  "
                 f"조문 {result.articles:4d}  호 {result.items:4d}  면책 {result.exclusions:2d}  "
                 f"표 사유 {result.table_items:3d}(보장종목 {result.coverages:2d})  "
-                f"부칙 {provisions:2d}"
+                f"부칙 {provisions:2d}  "
+                f"참조 {result.references:4d}(미해석 {result.dangling_references:2d})"
             )
 
         link_history(driver)
@@ -101,7 +110,10 @@ def run(data_dir: Path) -> int:
     finally:
         driver.close()
 
-    print(f"\n합계 조문 {totals['articles']}, 호 {totals['items']}, 면책 {totals['exclusions']}")
+    print(
+        f"\n합계 조문 {totals['articles']}, 호 {totals['items']}, "
+        f"면책 {totals['exclusions']}, 참조 {totals['references']}"
+    )
     print(f"열린 버전 표기: effective_to = {OPEN_ENDED}")
     return 0
 

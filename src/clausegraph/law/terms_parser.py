@@ -28,7 +28,12 @@ from .models import Article, Item, Paragraph, Subitem, TermsDocument
 _SECTION_RE = re.compile(r"^\s*□\s*(.+?)\s*(?:<개정[^>]*>|<신설[^>]*>)?\s*$")
 _SUBSECTION_RE = re.compile(r"^\s*<([가-힣][^>]{0,30})>\s*(?:<개정[^>]*>)?\s*$")
 _CHAPTER_RE = re.compile(r"^\s*(제\s?\d+\s?[관절]\s+.+?)\s*$")
-_ARTICLE_RE = re.compile(r"^\s*제\s?(\d+)\s?조(?:의\s?(\d+))?\s*\(([^)]*)\)\s*(.*)$")
+# 조문 머리글의 **번호 부분만** 정규식으로 잡는다. 제목은 괄호 깊이를 세어
+# 따로 끊는다 — 이유는 `match_article` 참고.
+_ARTICLE_HEAD_RE = re.compile(r"^\s*제\s?(\d+)\s?조(?:의\s?(\d+))?\s*(?=[(\[])")
+
+# 제목을 묶는 괄호. 표준약관은 두 짝을 섞어 쓴다.
+_TITLE_BRACKETS = {"(": ")", "[": "]"}
 
 _PARAGRAPH_RE = re.compile(r"^\s*([①-⑳])\s*(.*)$")
 _ITEM_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
@@ -50,6 +55,60 @@ _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 # 표 안의 줄은 조문 구조로 읽으면 안 된다.
 _TABLE_CHARS = frozenset("┌┐└┘├┤┬┴┼─│")
 
+
+
+def match_article(line: str) -> tuple[str, str, str] | None:
+    r"""조문 머리글을 (번호, 제목, 남은 본문)으로 끊는다. 아니면 None.
+
+    한때 이걸 정규식 하나로 했다.
+
+        r"^\s*제\s?(\d+)\s?조(?:의\s?(\d+))?\s*\(([^)]*)\)\s*(.*)$"
+
+    두 군데서 틀렸고, 둘 다 조용히 틀렸다(notes/022).
+
+    **1. 대괄호 제목을 못 읽어 조문을 통째로 버렸다.** 표준약관은 제목 안에
+    괄호가 겹칠 때 대괄호로 바꿔 쓴다.
+
+        제27조[보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지]
+
+    소괄호만 인정했으므로 이 줄은 조문 머리글로 인식되지 않았고, 내용은
+    **앞 조문의 본문에 붙었다.** 판본 10개에서 60개 조문이 이렇게 사라졌다.
+
+    **2. 제목 안의 괄호에서 제목이 잘렸다.** `[^)]*`는 첫 `)`에서 멈춘다.
+
+        제26조(보험료의 납입이 연체되는 경우 납입최고(독촉)와 계약의 해지)
+        -> 제목 "보험료의 납입이 연체되는 경우 납입최고(독촉"
+           본문 "와 계약의 해지) ① 계약자가 …"
+
+    제목이 잘리고 남은 조각이 본문 앞에 붙었다. 60개가 이 상태였다.
+
+    그래서 **여는 괄호의 짝을 찾을 때까지 깊이를 센다.** 정규식으로 균형
+    괄호를 세려 하지 않는다.
+    """
+    head = _ARTICLE_HEAD_RE.match(line)
+    if head is None:
+        return None
+
+    opener = line[head.end()]
+    closer = _TITLE_BRACKETS[opener]
+
+    depth = 0
+    for index in range(head.end(), len(line)):
+        char = line[index]
+        if char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                number, branch = head.group(1), head.group(2)
+                return (
+                    f"{number}의{branch}" if branch else number,
+                    line[head.end() + 1 : index].strip(),
+                    line[index + 1 :].strip(),
+                )
+    # 짝이 그 줄에서 닫히지 않으면 조문 머리글로 보지 않는다. 제목이 여러
+    # 줄로 넘어가는 경우는 없었고, 추측해서 자르면 제목과 본문이 섞인다.
+    return None
 
 def parse_terms(text: str, effective_on: str, admrul_seq: int) -> TermsDocument:
     """표준약관 평문에서 조문을 뽑는다."""
@@ -91,17 +150,17 @@ def parse_terms(text: str, effective_on: str, admrul_seq: int) -> TermsDocument:
             chapter = None
             continue
 
-        if (match := _CHAPTER_RE.match(line)) and not _ARTICLE_RE.match(line):
+        if (match := _CHAPTER_RE.match(line)) and match_article(line) is None:
             flush()
             header, buffer = None, []
             chapter = match.group(1).strip()
             continue
 
-        if (match := _ARTICLE_RE.match(line)) and section is not None:
+        if (parsed := match_article(line)) and section is not None:
             flush()
-            number, branch, title, rest = match.groups()
-            header = (f"{number}의{branch}" if branch else number, title.strip())
-            buffer = [rest] if rest.strip() else []
+            number, title, rest = parsed
+            header = (number, title)
+            buffer = [rest] if rest else []
             continue
 
         if header is not None:

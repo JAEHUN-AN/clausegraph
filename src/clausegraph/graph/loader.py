@@ -15,6 +15,7 @@ from ..law.appendix import Provision
 from ..law.exclusion_table import parse_exclusion_table
 from ..law.models import Article, TermsDocument
 from ..law.parse_cli import is_exclusion
+from ..law.references import find_references
 from ..law.table_parser import Lexicon
 from .schema import (
     CONSTRAINTS,
@@ -107,6 +108,14 @@ FOREACH (_ IN CASE WHEN row.is_own THEN [1] ELSE [] END |
 """
 
 # 같은 상품·같은 조문 번호를 시행일자 순으로 이어 붙인다.
+_MERGE_REFERENCES = """
+UNWIND $rows AS row
+MATCH (source {uid: row.source_uid})
+MATCH (target:Article {uid: row.target_uid})
+MERGE (source)-[link:REFERS_TO]->(target)
+SET link.in_proviso = row.in_proviso
+"""
+
 _LINK_ARTICLE_HISTORY = """
 MATCH (a:Article)
 WITH a.unit AS unit, a.number AS number, a
@@ -135,6 +144,10 @@ class LoadResult:
     exclusions: int = 0
     table_items: int = 0
     coverages: int = 0
+    references: int = 0
+    # 가리키는 조문을 그 판본·상품에서 찾지 못한 참조. 엣지를 만들지 않고
+    # 센다 — 대개 표 셀 안의 외부 법령 참조다(notes/022).
+    dangling_references: int = 0
 
 
 def apply_schema(driver: Driver) -> None:
@@ -180,6 +193,10 @@ def load_version(
         for chunk in _chunks(table_rows):
             session.run(_MERGE_TABLE_EXCLUSIONS, rows=chunk)
 
+        reference_rows, dangling = _reference_rows(doc, table_rows)
+        for chunk in _chunks(reference_rows):
+            session.run(_MERGE_REFERENCES, rows=chunk)
+
     return LoadResult(
         versions=1,
         articles=len(article_rows),
@@ -187,6 +204,8 @@ def load_version(
         exclusions=sum(1 for row in article_rows if row["is_exclusion"]),
         table_items=len(table_rows),
         coverages=len({row["coverage_uid"] for row in table_rows}),
+        references=len(reference_rows),
+        dangling_references=dangling,
     )
 
 
@@ -277,6 +296,58 @@ def _item_rows(article: Article, effective_from: str) -> list[dict[str, Any]]:
         for paragraph in article.paragraphs
         for item in paragraph.items
     ]
+
+
+def _reference_rows(
+    doc: TermsDocument, table_rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], int]:
+    """조문 간 참조 엣지의 행과, 대상을 찾지 못한 참조의 수.
+
+    가리키는 조문이 **같은 판본·같은 상품**에 있어야 엣지를 만든다. 번호만
+    맞는 다른 상품의 조문에 이으면 조용히 틀린 근거를 낸다 — 같은 '제3조'가
+    상품마다 전혀 다른 내용이다.
+
+    **표에서 뽑은 면책 사유도 함께 본다.** 실손 계열은 면책을 보장종목별
+    표로 적으므로 그 사유가 `article.paragraphs`에 없다. 처음에 이걸 빼먹어
+    면책의 예외 참조가 0개로 나왔다 — 정작 예외가 제일 많은 자리였다.
+    """
+    numbers: dict[str, set[str]] = {}
+    for article in doc.articles:
+        numbers.setdefault(article.unit, set()).add(article.number)
+
+    rows: list[dict[str, Any]] = []
+    dangling = 0
+    for article in doc.articles:
+        parent = article_uid(doc.effective_on, article.unit, article.number)
+        sources = [(parent, article.text)]
+        sources.extend(
+            (item_uid(parent, paragraph.number, item.number), item.text)
+            for paragraph in article.paragraphs
+            for item in paragraph.items
+        )
+        sources.extend(
+            (str(row["uid"]), str(row["text"]))
+            for row in table_rows
+            if row["article_uid"] == parent
+        )
+        for source_uid, text in sources:
+            for reference in find_references(text):
+                # 자기 자신을 가리키는 참조는 엣지로 만들지 않는다.
+                if reference.number == article.number:
+                    continue
+                if reference.number not in numbers[article.unit]:
+                    dangling += 1
+                    continue
+                rows.append(
+                    {
+                        "source_uid": source_uid,
+                        "target_uid": article_uid(
+                            doc.effective_on, article.unit, reference.number
+                        ),
+                        "in_proviso": reference.in_proviso,
+                    }
+                )
+    return rows, dangling
 
 
 def _table_rows(

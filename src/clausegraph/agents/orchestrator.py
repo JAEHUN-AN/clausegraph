@@ -92,9 +92,16 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
     )
 
     if certain:
+        # 면책 근거와 함께 그 면책의 '다만' 단서가 가리키는 조문도 낸다.
+        # "면책에 걸렸다"까지만 말하면 청구인에게는 절반만 답한 것이다 —
+        # 예외 조항이 다시 보상을 열어 줄 수 있다(notes/022).
         return _finalize(
             claim, Decision.DENIED, certain[0].reason,
-            tuple(hit.evidence for hit in certain), version, steps,
+            (
+                *(hit.evidence for hit in certain),
+                *(e for hit in certain for e in hit.exceptions),
+            ),
+            version, steps,
             # 코드로 확정된 면책이므로 불확실 히트가 결론을 흔들지 않는다.
             amount_computed=True, uncertain=False, masked=masked,
         )
@@ -127,7 +134,13 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
     decision = (
         Decision.PARTIAL if computed.value < claim.claimed_amount else Decision.PAID
     )
-    evidence = (*coverage_evidence[:2], *(hit.evidence for hit in uncertain[:2]))
+    # 사람에게 넘길 때가 예외 조항 정보가 가장 필요한 자리다. 심사자는
+    # "이 면책이 걸릴 수도 있다"와 "그런데 예외가 있다"를 함께 봐야 한다.
+    evidence = (
+        *coverage_evidence[:2],
+        *(hit.evidence for hit in uncertain[:2]),
+        *(e for hit in uncertain[:2] for e in hit.exceptions),
+    )
     return _finalize(
         claim, decision, computed.basis, evidence, version, steps,
         amount_computed=computed.computed, uncertain=bool(uncertain),
