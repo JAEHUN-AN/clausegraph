@@ -10,6 +10,7 @@ FP32 대신 **ONNX INT8**을 기본으로 쓴다. kograph에서 같은 모델로
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +31,40 @@ ONNX_INT8_FILE = "onnx/model_qint8_avx512_vnni.onnx"
 
 # torch | onnx-int8
 BACKEND = os.getenv("CLAUSEGRAPH_EMBED_BACKEND", "onnx-int8")
+
+
+def _load_tokenizer(auto_tokenizer: object, model_dir: Path) -> object:
+    """bge-m3 토크나이저. transformers의 오탐 경고를 지운다.
+
+    transformers 4.57은 이 모델을 열 때마다 경고를 낸다.
+
+    > The tokenizer you are loading ... with an incorrect regex pattern ...
+    > You should set the `fix_mistral_regex=True` flag
+
+    **이 모델에는 해당하지 않는다.** bge-m3는 `XLMRobertaTokenizerFast`이고
+    전처리기가 `Metaspace`다 — 경고가 말하는 Mistral의 정규식 전처리기가
+    아니다. 확인차 권고대로 `fix_mistral_regex=True`를 줘 봤더니 오히려
+    터진다(`'Metaspace' object does not support item assignment`).
+    평가셋 18문항과 약관 문장으로 토큰화를 대조해도 차이가 없다.
+
+    경고를 그냥 두면 CLI 출력마다 섞여 나와 측정 결과를 읽기 어렵다.
+    그래서 **이 문구만** 지운다. 다른 경고는 그대로 둔다.
+
+    `warnings.filterwarnings`로는 안 잡힌다 — transformers가 `warnings.warn`이
+    아니라 자기 로거로 내보내기 때문이다. 그래서 로깅 필터를 쓴다.
+    """
+    logger = logging.getLogger("transformers.tokenization_utils_base")
+    filter_ = _RegexWarningFilter()
+    logger.addFilter(filter_)
+    try:
+        return auto_tokenizer.from_pretrained(str(model_dir))
+    finally:
+        logger.removeFilter(filter_)
+
+
+class _RegexWarningFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "incorrect regex pattern" not in record.getMessage()
 
 
 class Embedder(Protocol):
@@ -58,7 +93,7 @@ class OnnxEmbedder:
         self.session = ort.InferenceSession(
             str(path), options, providers=["CPUExecutionProvider"]
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
+        self.tokenizer = _load_tokenizer(AutoTokenizer, model_dir)
         self._input_names = {spec.name for spec in self.session.get_inputs()}
 
     def encode(
