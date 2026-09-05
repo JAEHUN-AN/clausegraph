@@ -285,6 +285,9 @@ dev = [
 graph = [
     { name = "neo4j" },
 ]
+mcp = [
+    { name = "mcp" },
+]
 onnx = [
     { name = "onnxruntime" },
     { name = "optimum", extra = ["onnxruntime"] },
@@ -308,6 +311,7 @@ serve = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.1" },
     { name = "mcp", marker = "extra == 'serve'", specifier = ">=1.1" },
     { name = "neo4j", marker = "extra == 'graph'", specifier = ">=5.23" },
     { name = "neo4j", marker = "extra == 'serve'", specifier = ">=5.23" },
@@ -333,7 +337,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'onnx'", specifier = ">=4.40" },
     { name = "transformers", marker = "extra == 'serve'", specifier = ">=4.40" },
 ]
-provides-extras = ["graph", "rag", "onnx", "serve", "dev"]
+provides-extras = ["graph", "rag", "onnx", "serve", "dev", "mcp"]
 
 [[package]]
 name = "click"
