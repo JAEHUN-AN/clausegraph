@@ -14,3 +14,4 @@ data/law/
 data/eval/
 !data/eval/exclusion_recall.json
 data/kcd/
+data/goldset/cases/
