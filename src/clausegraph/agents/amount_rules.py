@@ -53,6 +53,14 @@ class AmountRule:
     outpatient_deductible_rate: float | None
     # 통원 1회(또는 1일)당 한도. 연간한도와 별개로 걸린다.
     outpatient_visit_limit: int | None = None
+    # 급여 통원 공제의 정액은 의료기관 종류로 갈린다. 상급종합병원ㆍ종합병원ㆍ
+    # 전문요양기관은 더 크다. 비급여 특약의 표는 한 줄뿐이라 이 값이 없다.
+    outpatient_deductible_tertiary: int | None = None
+    # 급여 통원 공제는 세 항 중 큰 금액이고, 세 번째 항이
+    # `보장대상의료비 x 건강보험 본인부담률`이다. 그 비율은 진료비 영수증에서
+    # 오는 값이라 **약관에 없다.** 그래서 이 값이 True인 규칙은 청구가
+    # 본인부담률을 함께 들고 오지 않으면 공제를 끝까지 계산할 수 없다.
+    outpatient_deductible_uses_copay_rate: bool = False
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
@@ -81,7 +89,10 @@ def _uid(product: str, number: str) -> str:
 
 # 급여 실손 — 제5조 ④ "본인부담금의 20%" -> 보상 80%,
 #             제5조 ① "합산하여 5천만원 이내",
-#             제3조 <표1> "1만원, 보장대상의료비의 20% 중 큰 금액"
+#             제3조 <표1> 통원 공제는 **세 항 중 큰 금액**이다.
+#               "1만원(상급종합ㆍ종합ㆍ전문요양기관은 2만원),
+#                보장대상 의료비의 20%,
+#                보장대상의료비에 건강보험 본인부담률을 곱한 금액 중 큰 금액"
 _BENEFIT_ARTICLES = (_uid(BENEFIT, "3"), _uid(BENEFIT, "5"))
 
 # 중증 비급여 — 자기부담 30% -> 보상 70%,
@@ -102,8 +113,10 @@ RULES: tuple[AmountRule, ...] = (
         annual_limit=50_000_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
+        outpatient_deductible_tertiary=20_000,
+        outpatient_deductible_uses_copay_rate=True,
         source_articles=_BENEFIT_ARTICLES,
-        note="통원 공제는 의료기관 종류에 따라 더 커진다 — 최소 유형만 반영했다",
+        note="통원 공제의 세 번째 항(건강보험 본인부담률)은 영수증에서 온다",
     ),
     AmountRule(
         product=BENEFIT,
@@ -112,6 +125,8 @@ RULES: tuple[AmountRule, ...] = (
         annual_limit=50_000_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
+        outpatient_deductible_tertiary=20_000,
+        outpatient_deductible_uses_copay_rate=True,
         source_articles=_BENEFIT_ARTICLES,
         note="상해급여와 같은 구조. 한도는 보장종목별로 따로 5천만원",
     ),

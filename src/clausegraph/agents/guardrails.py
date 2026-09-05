@@ -1,7 +1,7 @@
 """가드레일 — 판정이 넘지 말아야 할 선.
 
 공고의 "핵심 업무 시스템 연동 및 안전장치(가드레일) 설계"에 대응한다.
-넷 다 **판정을 더 보수적인 쪽으로만** 움직인다. 가드레일이 지급을 만들어
+다섯 다 **판정을 더 보수적인 쪽으로만** 움직인다. 가드레일이 지급을 만들어
 내는 일은 없다.
 """
 
@@ -19,6 +19,7 @@ GROUNDING = "grounding_gate"
 AMOUNT_NOT_COMPUTED = "amount_not_computed"
 UNCERTAIN_EXCLUSION = "uncertain_exclusion"
 PII_MASKED = "pii_masked"
+AMOUNT_UPPER_BOUND = "amount_upper_bound"
 
 
 def mask_pii(text: str) -> tuple[str, bool]:
@@ -38,6 +39,7 @@ def apply(
     *,
     amount_computed: bool,
     has_uncertain_exclusion: bool,
+    amount_is_upper_bound: bool = False,
 ) -> Adjudication:
     """판정에 가드레일을 건다. 통과하지 못하면 강등한다."""
     triggered = list(adjudication.guardrails)
@@ -66,6 +68,15 @@ def apply(
         triggered.append(UNCERTAIN_EXCLUSION)
         decision = Decision.HUMAN_REVIEW
         reason = "확인하지 못한 면책 가능성이 남아 있다 — 심사자 확인이 필요하다"
+        amount = 0
+
+    # 4. 공제를 끝까지 계산하지 못했으면 그 금액은 지급액이 아니라 상한이다.
+    #    상한을 지급액으로 내주면 과다지급이 된다. 계산이 "됐다"고 해도
+    #    항이 빠졌다면 여기서 막는다.
+    if decision in (Decision.PAID, Decision.PARTIAL) and amount_is_upper_bound:
+        triggered.append(AMOUNT_UPPER_BOUND)
+        decision = Decision.HUMAN_REVIEW
+        reason = "공제를 끝까지 계산하지 못했다 — 계산된 금액은 상한이다"
         amount = 0
 
     return adjudication.model_copy(

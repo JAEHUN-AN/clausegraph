@@ -34,6 +34,14 @@ class Claim(BaseModel):
     procedure: str | None = Field(default=None, description="수술·시술명")
     hospital_days: int = Field(default=0, description="입원일수")
     claimed_amount: int = Field(default=0, description="청구 금액(원)")
+    institution: str | None = Field(
+        default=None,
+        description="진료 의료기관 종류. 급여 통원 공제의 정액이 여기서 갈린다",
+    )
+    copay_rate: float | None = Field(
+        default=None,
+        description="건강보험 본인부담률. 영수증에서 오는 값이며 약관에 없다",
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
 

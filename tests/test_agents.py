@@ -127,6 +127,86 @@ def test_outpatient_visit_limit_caps_the_payout() -> None:
     assert "통원 1회 한도" in result.basis
 
 
+def _benefit_rule():
+    """급여 실손 규칙 — 공제가 세 항이고 정액이 기관 종류로 갈린다."""
+    return next(r for r in RULES if r.outpatient_deductible_uses_copay_rate)
+
+
+def test_copay_rate_term_is_included_when_given() -> None:
+    # 공제는 "정액, 의료비의 20%, 의료비 x 본인부담률 중 큰 금액"이다.
+    # 본인부담률 항을 빼먹으면 공제를 덜 빼고 과다지급이 된다.
+    rule = _benefit_rule()
+
+    with_rate = compute(
+        500_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="상급종합병원", copay_rate=0.60,
+    )
+
+    assert with_rate.is_upper_bound is False
+    assert with_rate.value == int((500_000 - 300_000) * rule.reimburse_rate)
+
+
+def test_missing_copay_rate_makes_the_amount_an_upper_bound() -> None:
+    rule = _benefit_rule()
+
+    result = compute(
+        500_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="상급종합병원",
+    )
+
+    # 계산 자체는 됐지만 공제를 덜 뺐을 수 있으므로 지급액이 아니라 상한이다.
+    assert result.computed is True
+    assert result.is_upper_bound is True
+    assert "건강보험 본인부담률" in result.missing
+    # 항을 빼먹은 쪽이 더 크다 — 그래서 상한이다.
+    assert result.value > int((500_000 - 300_000) * rule.reimburse_rate)
+
+
+def test_tertiary_institution_uses_the_larger_flat_deductible() -> None:
+    # 정액은 1만원, 상급종합ㆍ종합ㆍ전문요양기관은 2만원. 의료비가 작을 때만
+    # 정액 항이 비율 항을 넘어서므로, 작은 청구로 확인한다.
+    rule = _benefit_rule()
+    claimed = 80_000
+
+    clinic = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="의원", copay_rate=0.20,
+    )
+    tertiary = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="상급종합병원", copay_rate=0.20,
+    )
+
+    assert clinic.value > tertiary.value
+    assert clinic.value == int((claimed - 16_000) * rule.reimburse_rate)
+    assert tertiary.value == int((claimed - 20_000) * rule.reimburse_rate)
+
+
+def test_unknown_institution_is_flagged_not_guessed() -> None:
+    rule = _benefit_rule()
+
+    result = compute(
+        80_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        copay_rate=0.20,
+    )
+
+    assert result.is_upper_bound is True
+    assert "의료기관 종류" in result.missing
+
+
+def test_special_terms_deductible_needs_no_extra_input() -> None:
+    # 비급여 특약의 표는 두 항뿐이다("3만원과 의료비의 30% 중 큰 금액").
+    # 청구가 본인부담률을 들고 오지 않아도 끝까지 계산된다.
+    rule = next(r for r in RULES if not r.outpatient_deductible_uses_copay_rate)
+
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=False
+    )
+
+    assert result.is_upper_bound is False
+    assert result.missing == ()
+
+
 def test_visit_limit_does_not_apply_to_inpatient() -> None:
     rule = next(r for r in RULES if r.outpatient_visit_limit is not None)
 
@@ -261,6 +341,32 @@ def test_payment_with_an_unconfirmed_exclusion_goes_to_a_person() -> None:
 
     assert result.decision is Decision.HUMAN_REVIEW
     assert guardrails.UNCERTAIN_EXCLUSION in result.guardrails
+
+
+def test_payment_of_an_upper_bound_goes_to_a_person() -> None:
+    # 계산이 "됐다"고 해도 공제 항이 빠졌으면 그 금액은 상한이다.
+    # 상한을 지급액으로 내주면 과다지급이 된다.
+    result = guardrails.apply(
+        _adjudication(Decision.PARTIAL, (_evidence(),)),
+        amount_computed=True, has_uncertain_exclusion=False,
+        amount_is_upper_bound=True,
+    )
+
+    assert result.decision is Decision.HUMAN_REVIEW
+    assert guardrails.AMOUNT_UPPER_BOUND in result.guardrails
+    assert result.amount == 0
+
+
+def test_denial_is_not_disturbed_by_an_upper_bound() -> None:
+    # 부지급에는 지급액이 없다. 상한 표시가 부지급을 흔들어서는 안 된다.
+    result = guardrails.apply(
+        _adjudication(Decision.DENIED, (_evidence(),)),
+        amount_computed=True, has_uncertain_exclusion=False,
+        amount_is_upper_bound=True,
+    )
+
+    assert result.decision is Decision.DENIED
+    assert guardrails.AMOUNT_UPPER_BOUND not in result.guardrails
 
 
 def test_denial_on_a_confirmed_code_is_not_disturbed() -> None:

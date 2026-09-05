@@ -28,6 +28,11 @@ REDUCTION_PERIOD_DAYS = 730
 REDUCTION_RATE = 0.5
 
 
+# 급여 통원 공제의 정액이 커지는 의료기관. 순서가 중요하다 — "종합병원"이
+# "병원"을 포함하므로 큰 쪽을 먼저 본다.
+TERTIARY_INSTITUTIONS = ("상급종합병원", "종합병원", "전문요양기관")
+
+
 @dataclass(frozen=True)
 class Amount:
     value: int
@@ -35,6 +40,11 @@ class Amount:
     basis: str
     # 어떤 조항의 값을 썼는지. 근거 없이 나온 금액은 쓸 수 없다.
     source_articles: tuple[str, ...] = ()
+    # 공제를 끝까지 계산할 수 없어 **덜 뺐을 수 있다**는 표시. 그러면 이
+    # 금액은 지급액이 아니라 지급액의 상한이다. 지급해도 된다는 뜻이 아니다.
+    is_upper_bound: bool = False
+    # 상한이 된 이유. 무엇이 없어서 못 정했는지 사람이 알아야 한다.
+    missing: tuple[str, ...] = ()
 
 
 def compute(
@@ -44,6 +54,8 @@ def compute(
     rule: AmountRule | None = None,
     inpatient: bool = True,
     already_paid_this_year: int = 0,
+    institution: str | None = None,
+    copay_rate: float | None = None,
 ) -> Amount:
     """청구액과 약관 파라미터로 지급액을 계산한다."""
     if claimed_amount <= 0:
@@ -74,13 +86,17 @@ def compute(
         )
 
     steps: list[str] = []
+    missing: list[str] = []
 
-    # 1. 공제 — 통원에만. "정액 또는 의료비의 N% 중 큰 금액".
+    # 1. 공제 — 통원에만. 약관은 여러 항 중 **큰 금액**을 빼라고 한다.
+    #    항을 하나라도 빼먹으면 공제를 덜 빼게 되고, 그건 곧 과다지급이다.
     deductible = 0
     if not inpatient:
-        by_rate = int(claimed_amount * (rule.outpatient_deductible_rate or 0))
-        deductible = max(rule.outpatient_deductible or 0, by_rate)
-        steps.append(f"통원 공제 {deductible:,}원(정액과 비율 중 큰 쪽)")
+        deductible, missing = _outpatient_deductible(
+            claimed_amount, rule, institution, copay_rate
+        )
+        note = "덜 뺐을 수 있다" if missing else "여러 항 중 큰 쪽"
+        steps.append(f"통원 공제 {deductible:,}원({note})")
     payable = max(0, claimed_amount - deductible)
 
     # 2. 보상비율.
@@ -111,9 +127,49 @@ def compute(
     else:
         steps.append(f"연간한도 잔액 {remaining:,}원 이내")
 
+    if missing:
+        steps.append(f"{', '.join(missing)}을 확인하지 못해 이 금액은 상한이다")
+
     return Amount(
         payable,
         computed=True,
         basis=" / ".join(steps),
         source_articles=rule.source_articles,
+        is_upper_bound=bool(missing),
+        missing=tuple(missing),
     )
+
+
+def _outpatient_deductible(
+    claimed_amount: int,
+    rule: AmountRule,
+    institution: str | None,
+    copay_rate: float | None,
+) -> tuple[int, list[str]]:
+    """통원 공제와, 확인하지 못해 계산에서 빠진 항의 목록.
+
+    빠진 항이 있으면 공제를 **덜** 계산한 것이므로 지급액은 상한이 된다.
+    모르는 값을 지어내 공제를 키우면 과소지급이고, 항을 빼먹은 채 지급액이라
+    부르면 과다지급이다. 둘 다 하지 않고 상한이라고 말한다.
+    """
+    missing: list[str] = []
+
+    # 정액 항 — 의료기관 종류로 갈린다. 종류를 모르면 작은 쪽을 쓴다.
+    flat = rule.outpatient_deductible or 0
+    tertiary = rule.outpatient_deductible_tertiary
+    if tertiary is not None:
+        if institution is None:
+            missing.append("의료기관 종류")
+        elif any(name in institution for name in TERTIARY_INSTITUTIONS):
+            flat = tertiary
+
+    terms = [flat, int(claimed_amount * (rule.outpatient_deductible_rate or 0))]
+
+    # 본인부담률 항 — 약관에 없는 값이라 청구가 들고 와야 한다.
+    if rule.outpatient_deductible_uses_copay_rate:
+        if copay_rate is None:
+            missing.append("건강보험 본인부담률")
+        else:
+            terms.append(int(claimed_amount * copay_rate))
+
+    return max(terms), missing
