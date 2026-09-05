@@ -111,7 +111,6 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
     hits: list[ExclusionHit] = []
     for candidate in candidates:
         text = candidate["text"]
-        exceptions = _exception_evidence(candidate, claim.product)
         evidence = Evidence(
             node_uid=candidate["node_uid"],
             product=claim.product,
@@ -129,7 +128,9 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
                     reason=f"진단코드 {', '.join(matched)}가 약관이 정한 면책 범위에 든다",
                     certain=True,
                     matched_codes=matched,
-                    exceptions=exceptions,
+                    # 걸린 것에만 만든다. 후보 70건마다 만들면 청구 1건당
+                    # 지연이 두 배가 된다 — 대부분은 안 걸린다(notes/011 후기).
+                    exceptions=_exception_evidence(candidate, claim.product),
                 )
             )
             continue
@@ -141,7 +142,7 @@ def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHi
                     evidence=evidence,
                     reason=f"청구 내용에 '{keyword}'가 나타난다 — 사람 확인 필요",
                     certain=False,
-                    exceptions=exceptions,
+                    exceptions=_exception_evidence(candidate, claim.product),
                 )
             )
     return hits, len(candidates)
