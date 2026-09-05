@@ -36,7 +36,8 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
         claim = claim.model_copy(update={"narrative": masked_narrative})
 
     version, step = _timed(
-        "보장탐색:버전확정", lambda: resolve_version(driver, claim.enrolled_on)
+        "보장탐색:버전확정",
+        lambda: resolve_version(driver, claim.enrolled_on, claim.product),
     )
     steps.append(
         step(

@@ -137,3 +137,67 @@ def test_provision_without_new_contract_scope_is_not_decided() -> None:
     )[0]
 
     assert applies_to_enrollment(provision, "20200101") is None
+
+
+# --- 상품 범위 ---
+
+
+def _provision(body: str, promulgated_on: str = "20260506"):
+    return parse_provisions(_xml(promulgated_on, body))[0]
+
+
+def test_excluded_product_is_read() -> None:
+    provision = _provision(
+        "[별표15] 표준약관(개인실손의료보험은 제외한다) 개정내용은 "
+        "2026년 6월 6일 이후 체결되는 보험계약부터 적용한다."
+    )
+
+    assert provision.excluded_products == ("개인실손의료보험",)
+
+
+def test_included_product_is_read() -> None:
+    provision = _provision(
+        "별표15 중 보증보험 표준약관(채무이행보증보험 표준약관, 신용보험 표준약관, "
+        "신원보증보험 표준약관) 규정은 2012년 1월 1일부터 시행한다.",
+        "20110705",
+    )
+
+    assert "보증보험" in provision.included_products
+
+
+def test_excluded_product_is_not_covered() -> None:
+    # 이걸 놓치면 정반대로 판정한다. 실손에 적용일을 걸면 안 된다.
+    provision = _provision(
+        "[별표15] 표준약관(개인실손의료보험은 제외한다) 개정내용은 "
+        "2026년 6월 6일 이후 체결되는 보험계약부터 적용한다."
+    )
+
+    assert provision.covers_product("기본형 실손의료보험(급여 실손의료비)") is False
+    assert provision.covers_product("실손의료보험 특별약관1(중증 비급여 실손의료비)") is False
+
+
+def test_other_products_are_covered_when_only_one_is_excluded() -> None:
+    provision = _provision(
+        "[별표15] 표준약관(개인실손의료보험은 제외한다) 개정내용은 "
+        "2026년 6월 6일 이후 체결되는 보험계약부터 적용한다."
+    )
+
+    assert provision.covers_product("생명보험") is True
+    assert provision.covers_product("질병·상해보험(손해보험 회사용)") is True
+
+
+def test_inclusion_list_covers_only_those_products() -> None:
+    provision = _provision(
+        "별표15 중 <자동차보험> 면책사항 규정은 2004년 8월 22일부터 적용한다.",
+        "20040625",
+    )
+
+    assert provision.covers_product("자동차보험") is True
+    assert provision.covers_product("생명보험") is False
+
+
+def test_provision_without_scope_covers_everything() -> None:
+    provision = _provision("<별표 15> 표준약관의 개정 내용은 2010년 6월 1일부터 시행한다.")
+
+    assert provision.covers_product("생명보험") is True
+    assert provision.covers_product("기본형 실손의료보험(급여 실손의료비)") is True

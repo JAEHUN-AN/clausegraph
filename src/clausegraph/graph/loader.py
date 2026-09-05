@@ -91,12 +91,19 @@ MERGE (p:Provision {uid: row.uid})
 SET p.promulgated_on = row.promulgated_on,
     p.new_contracts_only = row.new_contracts_only,
     p.candidate_dates = row.candidate_dates,
-    p.text = row.text
-MERGE (v)-[:HAS_PROVISION]->(p)
+    p.text = row.text,
+    p.included_products = row.included_products,
+    p.excluded_products = row.excluded_products,
+    p.applies_from = row.applies_from
+MERGE (v)-[link:HAS_PROVISION]->(p)
+// is_own은 **관계**에 붙인다. Provision 노드는 여러 버전이 공유하므로
+// (부칙은 세칙 개정 이력 전체가 딸려 온다) 노드에 붙이면 한 부칙이 모든
+// 버전의 '자기 부칙'이 된다 — 실제로 그렇게 만들었다가 모든 버전이 같은
+// 적용일을 갖는 버그를 냈다 (notes/016).
+SET link.is_own = coalesce(row.is_own, false)
 FOREACH (_ IN CASE WHEN row.is_own THEN [1] ELSE [] END |
-    SET v.applies_from = coalesce(row.applies_from, v.effective_from),
-        v.applies_to_new_contracts_only = row.new_contracts_only,
-        v.provision_uid = row.uid)
+    SET v.provision_uid = row.uid,
+        v.applies_to_new_contracts_only = row.new_contracts_only)
 """
 
 # 같은 상품·같은 조문 번호를 시행일자 순으로 이어 붙인다.
@@ -199,6 +206,10 @@ def load_provisions(
     자신의 부칙이 신계약 기준이고 날짜 후보가 하나면 그 날짜를
     `applies_from`으로 삼는다 — **세칙 시행일이 아니라 약관 적용일**이다.
     후보가 여럿이면 단정하지 않고 시행일자를 그대로 쓴다.
+
+    **적용일은 Version이 아니라 Provision에 붙인다.** 부칙이 상품을 한정하기
+    때문이다 — 2026-05-06 개정은 적용일을 6월 6일로 미루면서 개인실손의료보험을
+    빼 두었다. 버전 전체에 걸면 실손 가입자에게 틀린 약관을 들이댄다.
     """
     rows = []
     for provision in provisions:
@@ -218,6 +229,8 @@ def load_provisions(
                 "text": provision.text,
                 "is_own": is_own,
                 "applies_from": applies_from,
+                "included_products": list(provision.included_products),
+                "excluded_products": list(provision.excluded_products),
             }
         )
     if not rows:

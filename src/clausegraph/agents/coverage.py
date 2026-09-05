@@ -3,6 +3,16 @@
 먼저 **버전을 고정한다.** 가입일이 정해지면 적용 약관이 정해지고, 그 뒤의
 모든 조회는 그 버전 안에서만 이뤄져야 한다. 이 순서를 어기면 2025년
 가입자에게 2026년 조항을 들이대게 된다(notes/006).
+
+버전을 고르는 기준은 세칙 시행일이 **아니다.** 부칙이 약관의 적용일을
+따로 정하고, 그 적용일이 상품마다 다르다.
+
+    2026-05-06 개정의 부칙:
+    "[별표15] 표준약관(개인실손의료보험은 제외한다) 개정내용은
+     2026년 6월 6일 이후 체결되는 보험계약부터 적용한다"
+
+즉 같은 개정이 생명보험에는 6월 6일부터, 실손에는 (그 부칙이 빼 두었으므로)
+시행일부터 적용된다. **버전 선택이 상품별로 갈린다**(notes/016).
 """
 
 from __future__ import annotations
@@ -11,16 +21,17 @@ from datetime import date
 
 from neo4j import Driver
 
+from ..law.appendix import Provision
 from .models import Evidence
 
-# 세칙 시행일이 아니라 **약관 적용일**로 구간을 잡는다. 부칙이
-# "2026년 6월 6일 이후 체결되는 보험계약부터 적용한다"고 정하면
-# 5/6~6/6 가입자에게는 옛 약관이 적용된다 (notes/015).
-_VERSION_RANGES = """
+_VERSION_ROWS = """
 MATCH (v:Version)
-RETURN coalesce(v.applies_from, v.effective_from) AS applies_from,
-       v.effective_from AS effective_from
-ORDER BY applies_from
+OPTIONAL MATCH (v)-[:HAS_PROVISION {is_own: true}]->(p:Provision)
+RETURN v.effective_from AS effective_from,
+       p.applies_from AS applies_from,
+       coalesce(p.included_products, []) AS included_products,
+       coalesce(p.excluded_products, []) AS excluded_products
+ORDER BY v.effective_from
 """
 
 _COVERAGE_ARTICLES = """
@@ -35,9 +46,8 @@ ORDER BY toInteger(split(a.number, '의')[0])
 
 QUOTE_CHARS = 160
 
-# 버전 구간과 상품별 보장 조항은 약관을 다시 적재할 때까지 바뀌지 않는다.
-# 청구마다 Neo4j를 다시 때리면 그것이 그대로 지연이 된다(notes/011).
-_VERSION_CACHE: list[tuple[str, str]] = []
+# 버전이 넷뿐이라 구간을 한 번 읽어 두고 프로세스 안에서 고른다.
+_VERSION_CACHE: list[dict[str, object]] = []
 _COVERAGE_CACHE: dict[tuple[str, str], tuple[Evidence, ...]] = {}
 
 
@@ -47,34 +57,57 @@ def clear_caches() -> None:
     _COVERAGE_CACHE.clear()
 
 
-def _version_ranges(driver: Driver) -> list[tuple[str, str]]:
-    """(적용 시작일, 버전 식별자) 목록. 적용일 순으로 정렬돼 있다."""
+def _version_rows(driver: Driver) -> list[dict[str, object]]:
+    """버전과 그 자신의 부칙. 시행일자 순으로 정렬돼 있다."""
     if not _VERSION_CACHE:
         with driver.session() as session:
-            _VERSION_CACHE.extend(
-                (record["applies_from"], record["effective_from"])
-                for record in session.run(_VERSION_RANGES)
-            )
+            _VERSION_CACHE.extend(dict(record) for record in session.run(_VERSION_ROWS))
     return _VERSION_CACHE
 
 
-def resolve_version(driver: Driver, enrolled_on: date) -> str | None:
-    """가입일에 적용되던 약관 버전. 없으면 None.
+def applies_from(row: dict[str, object], product: str | None) -> str:
+    """이 버전이 그 상품에 적용되기 시작하는 날.
 
-    버전이 넷뿐이라 구간을 한 번 읽어 두고 프로세스 안에서 고른다.
+    부칙이 적용일을 미뤘더라도 그 상품을 빼 두었으면 시행일부터 적용된다.
+    """
+    effective_from = str(row["effective_from"])
+    deferred = row.get("applies_from")
+    if not deferred:
+        return effective_from
+    if product is None:
+        return str(deferred)
+
+    scope = Provision(
+        promulgated_on="",
+        new_contracts_only=True,
+        candidate_dates=(),
+        text="",
+        included_products=tuple(row.get("included_products") or ()),
+        excluded_products=tuple(row.get("excluded_products") or ()),
+    )
+    return str(deferred) if scope.covers_product(product) else effective_from
+
+
+def resolve_version(
+    driver: Driver, enrolled_on: date, product: str | None = None
+) -> str | None:
+    """가입일에 그 상품에 적용되던 약관 버전. 없으면 None.
+
+    `product`를 주지 않으면 부칙의 적용일을 상품 구분 없이 쓴다 — 개요용이며,
+    판정에는 반드시 상품을 함께 넘겨야 한다.
     """
     on_date = enrolled_on.strftime("%Y%m%d")
-    ranges = _version_ranges(driver)
-    # 적용일 순으로 정렬돼 있으므로, 가입일 이하인 마지막 구간이 답이다.
+    starts = sorted(
+        (applies_from(row, product), str(row["effective_from"]))
+        for row in _version_rows(driver)
+    )
+
     chosen = None
-    for applies_from, version in ranges:
-        if applies_from <= on_date:
+    for start, version in starts:
+        if start <= on_date:
             chosen = version
         else:
             break
-    if chosen is None:
-        return None
-    # 가장 이른 적용일보다 앞선 가입은 수집 범위 밖이다.
     return chosen
 
 

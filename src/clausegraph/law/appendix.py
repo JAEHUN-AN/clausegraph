@@ -49,6 +49,27 @@ _NEW_CONTRACTS_RE = re.compile(r"신계약|신규로\s*체결|체결되는\s*보
 # 문장 경계. 법령문은 '…한다.'로 끝난다.
 _SENTENCE_RE = re.compile(r"(?<=다\.)\s*")
 
+# 적용 대상 상품을 한정하는 표현. 두 방향이 다 나온다.
+#
+#   제외 — `표준약관(개인실손의료보험은 제외한다) 개정내용은 …`
+#   포함 — `별표15 중 <자동차보험> …`, `별표15 중 보증보험 표준약관 …`
+#
+# **제외를 놓치면 정반대로 판정한다.** 2026-05-06 개정의 부칙은 적용일을
+# 2026-06-06으로 미루면서 개인실손의료보험을 빼 두었다. 이걸 버전 전체에
+# 걸면 실손 가입자에게 틀린 약관을 들이댄다 (notes/016).
+_EXCLUDES_RE = re.compile(r"표준약관\s*\(([^)]{2,40}?)은?\s*제외한다\)")
+
+# 포함 표현은 두 모양으로 나온다.
+#
+#   `별표15. 표준약관 중 <자동차보험> ‘<25> …`   — 꺾쇠로 묶인 상품명
+#   `별표15 중 보증보험 표준약관(…)`             — 뒤에 '표준약관'이 붙는다
+#
+# 꺾쇠 안의 이름은 그 자체로 분명하므로 뒤에 무엇이 오는지 따지지 않는다.
+_INCLUDES_RE = re.compile(
+    r"별표\s*15\s*(?:\.|중)?\s*(?:표준약관\s*중\s*)?"
+    r"(?:<([가-힣ㆍ·\s]{2,30}?)>|([가-힣ㆍ·\s]{2,30}?)\s*표준약관)"
+)
+
 
 @dataclass(frozen=True)
 class Provision:
@@ -58,12 +79,28 @@ class Provision:
     new_contracts_only: bool
     candidate_dates: tuple[str, ...]
     text: str
+    # 적용 대상을 한정하는 상품 이름. 비어 있으면 한정하지 않는다.
+    included_products: tuple[str, ...] = ()
+    excluded_products: tuple[str, ...] = ()
 
     @property
     def summary(self) -> str:
         scope = "신계약부터" if self.new_contracts_only else "적용 대상 미확정"
         dates = ", ".join(self.candidate_dates) or "날짜 없음"
         return f"공포 {self.promulgated_on} / {scope} / 날짜 후보 {dates}"
+
+    def covers_product(self, product: str) -> bool:
+        """이 적용례가 그 상품에 걸리는가.
+
+        상품명이 약관마다 길고 다르므로(`기본형 실손의료보험(급여 실손의료비)`)
+        부칙의 짧은 표기(`개인실손의료보험`)와 글자로 맞추기 어렵다. 그래서
+        핵심어가 서로의 안에 들어 있는지로 본다.
+        """
+        if any(_overlaps(name, product) for name in self.excluded_products):
+            return False
+        if not self.included_products:
+            return True
+        return any(_overlaps(name, product) for name in self.included_products)
 
 
 def parse_provisions(admrul_xml: str) -> tuple[Provision, ...]:
@@ -91,9 +128,40 @@ def parse_provisions(admrul_xml: str) -> tuple[Provision, ...]:
                 new_contracts_only=bool(_NEW_CONTRACTS_RE.search(joined)),
                 candidate_dates=dates,
                 text=" ".join(joined.split()),
+                included_products=_scoped(_INCLUDES_RE, joined),
+                excluded_products=_scoped(_EXCLUDES_RE, joined),
             )
         )
     return tuple(provisions)
+
+
+def _scoped(pattern: re.Pattern[str], text: str) -> tuple[str, ...]:
+    """정규식이 여러 그룹을 쓰면 findall이 튜플을 준다. 빈 그룹을 걸러 낸다."""
+    names: list[str] = []
+    for found in pattern.findall(text):
+        candidates = found if isinstance(found, tuple) else (found,)
+        for candidate in candidates:
+            name = candidate.strip()
+            if name and name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+# 상품명을 맞출 때 쓸모없는 수식어. 떼어 내면 부칙의 짧은 표기와 맞는다.
+_PRODUCT_NOISE_RE = re.compile(r"기본형|개인|단체|특별약관\d*|\(.*?\)|\s+")
+
+
+def _overlaps(left: str, right: str) -> bool:
+    """두 상품 표기가 같은 상품을 가리키는가.
+
+    `개인실손의료보험`(부칙)과 `기본형 실손의료보험(급여 실손의료비)`(약관)을
+    맞춰야 한다. 수식어를 떼어 낸 뒤 한쪽이 다른 쪽에 들어 있으면 같다고 본다.
+    """
+    a = _PRODUCT_NOISE_RE.sub("", left)
+    b = _PRODUCT_NOISE_RE.sub("", right)
+    if not a or not b:
+        return False
+    return a in b or b in a
 
 
 def applies_to_enrollment(provision: Provision, enrolled_on: str) -> bool | None:
