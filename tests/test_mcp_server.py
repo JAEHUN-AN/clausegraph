@@ -91,6 +91,25 @@ def test_adjudication_tool_says_the_decision_is_advisory(tools) -> None:
     assert "보조" in tools["adjudicate_claim"].description
 
 
+def test_adjudication_tool_takes_the_contract_running_totals(tools) -> None:
+    # 연간한도는 이미 지급한 금액을 빼야 하고, 통원 횟수 한도는 이미 쓴
+    # 횟수를 알아야 판정된다. 약관에도 청구서에도 없는 값이라 호출자가
+    # 넣어야 한다 - 없으면 지급액 대신 상한이 나온다(notes/027).
+    properties = tools["adjudicate_claim"].input_schema["properties"]
+
+    assert "paid_this_year" in properties
+    assert "outpatient_visits_this_year" in properties
+
+
+def test_running_totals_are_optional_and_say_so(tools) -> None:
+    tool = tools["adjudicate_claim"]
+    required = set(tool.input_schema.get("required", []))
+
+    assert "paid_this_year" not in required
+    # 모르면 넣지 말라고 분명히 적혀 있어야 모델이 값을 지어내지 않는다.
+    assert "모르면 넣지 말 것" in tool.description
+
+
 def test_server_instructions_tell_the_model_to_ask_for_the_date() -> None:
     assert "가입일" in (mcp.instructions or "")
 

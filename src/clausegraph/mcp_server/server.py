@@ -28,7 +28,7 @@ from ..agents.coverage import resolve_version
 from ..agents.exclusion import enumerate_exclusions, screen
 from ..agents.extract import extract_claim
 from ..agents.kcd import matches
-from ..agents.models import Adjudication
+from ..agents.models import Adjudication, ClaimHistory
 from ..agents.orchestrator import adjudicate
 from ..agents.quote import prose_quote
 from ..agents.terminology import lookup
@@ -341,7 +341,13 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
 
 
 @mcp.tool()
-def adjudicate_claim(product: str, enrolled_on: str, narrative: str) -> str:
+def adjudicate_claim(
+    product: str,
+    enrolled_on: str,
+    narrative: str,
+    paid_this_year: int = -1,
+    outpatient_visits_this_year: int = -1,
+) -> str:
     """청구 한 건을 심사해 판정과 근거, 발동한 가드레일을 반환한다.
 
     청구 내용이 자연어로 들어왔을 때 호출한다. 사실추출 -> 보장탐색 ->
@@ -351,12 +357,33 @@ def adjudicate_claim(product: str, enrolled_on: str, narrative: str) -> str:
     **판정은 보조다.** `HUMAN_REVIEW`나 `NEEDS_DOCS`가 나오면 그대로
     사용자에게 전하고, 지급/부지급을 단정하지 말 것. 지급액도 계산 근거가
     갖춰졌을 때만 나온다.
+
+    `paid_this_year`와 `outpatient_visits_this_year`는 **그 계약의 올해
+    누적**이다. 연간한도는 이미 지급한 금액을 빼야 하고 통원 횟수 한도는
+    이미 쓴 횟수를 알아야 판정된다. 약관에도 청구서에도 없는 값이므로
+    보험사 시스템에서 받아 넣어야 한다.
+
+    **모르면 넣지 말 것.** 값을 지어내면 한도를 다 쓴 계약에 그대로 지급하게
+    된다. 넣지 않으면 지급액 대신 **상한**이 나오고 판정은 `HUMAN_REVIEW`로
+    간다 — 그게 맞는 답이다(notes/027).
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
         return f"가입일 형식이 올바르지 않다: {enrolled_on!r} (YYYY-MM-DD)"
 
-    claim = extract_claim("MCP", product, parsed, narrative, enrich=lookup)
+    # 음수는 "주지 않았다"는 뜻이다. 0은 "올해 아무것도 안 받았다"이고,
+    # 둘은 전혀 다른 말이다.
+    history = (
+        None
+        if paid_this_year < 0 and outpatient_visits_this_year < 0
+        else ClaimHistory(
+            paid_this_year=max(0, paid_this_year),
+            outpatient_visits_this_year=max(0, outpatient_visits_this_year),
+        )
+    )
+    claim = extract_claim(
+        "MCP", product, parsed, narrative, enrich=lookup, history=history
+    )
     result = adjudicate(driver(), claim)
     return _render(result, claim.diagnosis_codes)
 
