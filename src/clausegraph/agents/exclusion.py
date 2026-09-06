@@ -72,6 +72,19 @@ def clear_caches() -> None:
     _distinctive_tokens_for.cache_clear()
 _TOKEN_RE = re.compile(r"[가-힣]{2,}")
 
+# 조사·어미. 어절에서 이걸 떼어야 '대상'과 '대상에'가 같은 말이 된다.
+#
+# 형태소 분석기를 붙이지 않은 이유는 CPU·의존성 때문이 아니라, 떼는 규칙이
+# 틀렸을 때 **무엇이 사라졌는지 보이지 않기** 때문이다. 목록을 손에 쥐고
+# 있으면 '산부인과'가 '산부인'이 되는 사고를 눈으로 막을 수 있다.
+#
+# 긴 것부터 본다. 그리고 떼고 남은 어간이 두 글자 미만이면 떼지 않는다 —
+# '치과'가 '치'가 되면 아무 데나 걸린다.
+_PARTICLES = (
+    "에서", "으로", "에게", "부터", "까지", "로서", "로써", "하는", "되는", "이나",
+    "은", "는", "이", "가", "을", "를", "에", "로", "의", "도", "만", "한", "인", "된",
+)
+
 
 @dataclass(frozen=True)
 class ExclusionHit:
@@ -175,7 +188,7 @@ def _exception_evidence(
 def _distinctive_tokens_for(version: str, corpus: tuple[str, ...]) -> frozenset[str]:
     frequency: dict[str, int] = {}
     for document in corpus:
-        for token in set(_TOKEN_RE.findall(document)):
+        for token in _tokens(document):
             frequency[token] = frequency.get(token, 0) + 1
 
     limit = max(1, int(len(corpus) * MAX_DOCUMENT_FREQUENCY))
@@ -219,9 +232,27 @@ def _quote(text: str) -> str:
     return prose_quote(text, QUOTE_CHARS)
 
 
+def stem(token: str) -> str:
+    """어절에서 조사·어미를 한 번 뗀다.
+
+    이걸 안 하면 **조사가 붙은 어절이 희귀어로 보인다.** 실측으로 변별어
+    4,528개 중 **2,111개(46.6%)** 가 조사로 끝나는 어절이었다. `대상`은
+    문서빈도가 높아 걸러지는데 `대상에`는 그대로 통과해, 청구 서술에
+    '지급 대상에'만 있어도 아무 면책이나 걸렸다(notes/025).
+    """
+    for particle in _PARTICLES:
+        if token.endswith(particle) and len(token) - len(particle) >= MIN_KEYWORD_LEN:
+            return token[: -len(particle)]
+    return token
+
+
+def _tokens(text: str) -> set[str]:
+    return {stem(token) for token in _TOKEN_RE.findall(text)}
+
+
 def _distinctive_overlap(clause: str, haystack: str, distinctive: frozenset[str]) -> str | None:
     """가장 긴 것부터 본다 — 긴 낱말일수록 우연히 겹칠 일이 적다."""
-    tokens = sorted(set(_TOKEN_RE.findall(clause)), key=len, reverse=True)
+    tokens = sorted(_tokens(clause), key=len, reverse=True)
     for token in tokens:
         if len(token) < MIN_KEYWORD_LEN or token not in distinctive:
             continue

@@ -90,7 +90,29 @@ _MODIFIER_RE = re.compile(
     r"^(?:상세불명의?|기타의?|기타\s+명시된|명시되지\s*않은|달리\s*분류되지\s*않은|"
     r"그\s*밖의?|미상의?|불명의?)\s*"
 )
-_TRAILING_RE = re.compile(r"[,(].*$")
+# 이름 **중간**의 괄호는 잘라 내는 것이 아니라 **덜어 낸다.**
+#
+# 한때 `[,(].*$`로 첫 괄호부터 끝까지 잘랐다. 그러면 괄호가 중간에 있는
+# 병명이 앞머리 수식어만 남는다.
+#
+#     "만성 (소아기) 육아종성 질환"  ->  "만성"      -> 열쇠 '만성' = D71
+#     "특정(개별) 공포증"            ->  "특정"      -> 열쇠 '특정' = F40
+#
+# 그 결과 청구 서술의 `특정부위`가 F40(공포성 불안장애)을 물어 왔고,
+# 코드가 붙으면 **확실(certain) 면책**이 된다 — 근거 없는 부지급이다.
+# 실제 분쟁조정사례에서 이 오발동을 잡았다(notes/025).
+#
+# 괄호만 덜어 내면 남는 이름이 오히려 좋아진다.
+#     "만성 (소아기) 육아종성 질환"  ->  "만성 육아종성 질환"
+_PARENTHETICAL_RE = re.compile(r"[(\[][^)\]]*[)\]]")
+# 쉼표 뒤는 자른다 — `질환, 상세불명` 꼴의 뒷가지는 수식어다.
+#
+# 다만 쉼표가 **나열**일 때가 있다. 그때 자르면 또 앞머리 수식어만 남는다.
+#     "급성, 재발성 또는 아급성 전방포도막염"  ->  "급성"  -> 열쇠 '급성'
+# 그래서 **자른 결과가 조각이면 자르지 않은 이름을 쓴다.** 조각인지는
+# 길이로 본다 — 두 글자 이하로 줄었으면 병명이 아니라 수식어다.
+_TRAILING_RE = re.compile(r",.*$")
+MIN_TRUNCATED_LEN = 3
 _WS_RE = re.compile(r"\s+")
 
 
@@ -191,7 +213,11 @@ def term_keys(name: str) -> tuple[list[str], list[str]]:
     tail을 따로 돌려주는 이유는 상한이 다르기 때문이다. 전체 병명은
     정확하지만 tail은 흔한 낱말이 되기 쉽다.
     """
-    cleaned = _WS_RE.sub(" ", _TRAILING_RE.sub("", name)).strip()
+    without_parens = _WS_RE.sub(" ", _PARENTHETICAL_RE.sub(" ", name)).strip()
+    cleaned = _WS_RE.sub(" ", _TRAILING_RE.sub("", without_parens)).strip()
+    # 잘랐더니 조각만 남았으면 자르지 않은 쪽을 쓴다.
+    if cleaned != without_parens and len(cleaned) < MIN_TRUNCATED_LEN:
+        cleaned = without_parens
     if not cleaned:
         return [], []
 

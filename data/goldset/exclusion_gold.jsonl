@@ -1,0 +1,13 @@
+{"case_slno": 14, "gold_keyword": "보조기", "note": "질병치료 목적의 보조기 구입비용"}
+{"case_slno": 26, "gold_keyword": "치과치료", "note": "치과치료에서 발생한 비급여 의료비"}
+{"case_slno": 49, "gold_keyword": "한방치료", "note": "한방치료에서 발생한 비급여 입원치료비"}
+{"case_slno": 56, "gold_keyword": "보조기", "note": "압박고정용 재료대가 '보조기 등'에 해당하는지"}
+{"case_slno": 76, "gold_keyword": "성장호르몬", "note": "성장호르몬제 약값"}
+{"case_slno": 79, "gold_keyword": null, "note": "부담보 해제 가능 여부 — 면책 조항이 아니라 계약 조건"}
+{"case_slno": 85, "gold_keyword": null, "note": "부담보 해제 가능 여부 — 면책 조항이 아니라 계약 조건"}
+{"case_slno": 154, "gold_keyword": null, "note": "부담보 해제 대상 여부 — 면책 조항이 아니라 계약 조건"}
+{"case_slno": 155, "gold_keyword": "한방치료", "note": "한방병원 비급여 치료비"}
+{"case_slno": 156, "gold_keyword": "치과치료", "note": "치과치료에서 발생한 비급여 의료비"}
+{"case_slno": 159, "gold_keyword": "보조기", "note": "바코패드가 '보조기'에 해당하는지"}
+{"case_slno": 160, "gold_keyword": "성장호르몬", "note": "성장호르몬제 투여 비용(급여)"}
+{"case_slno": 163, "gold_keyword": "건강검진", "note": "예방목적 건강검진·백신 접종·증명서 발급 비용"}

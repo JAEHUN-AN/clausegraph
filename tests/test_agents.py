@@ -10,7 +10,7 @@ import pytest
 from clausegraph.agents import guardrails
 from clausegraph.agents.amount import compute
 from clausegraph.agents.amount_rules import RULES, find_rule
-from clausegraph.agents.exclusion import _quote
+from clausegraph.agents.exclusion import _quote, stem
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
 from clausegraph.agents.models import Adjudication, Decision, Evidence
@@ -90,6 +90,41 @@ def test_impossible_date_is_dropped_not_guessed() -> None:
     claim = extract_claim("C3", PRODUCT, ENROLLED, "2026.02.31 사고가 있었습니다.")
 
     assert claim.incident_on is None
+
+
+# --- 어절에서 조사 떼기 ---
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        # 이걸 안 하면 조사가 붙은 어절이 희귀어로 보인다.
+        ("대상에", "대상"),
+        ("치료에서", "치료"),
+        ("가능한", "가능"),
+        ("처방된", "처방"),
+        ("보상하는", "보상"),
+        ("의료비를", "의료비"),
+        # 조사가 아닌 끝소리는 건드리지 않는다.
+        ("보조기", "보조기"),
+        ("성장호르몬제", "성장호르몬제"),
+        ("간병비", "간병비"),
+    ],
+)
+def test_particle_is_stripped_only_when_it_is_a_particle(token: str, expected: str) -> None:
+    assert stem(token) == expected
+
+
+@pytest.mark.parametrize("token", ["치과", "결과", "제한", "확인", "비만"])
+def test_short_word_is_not_stripped_into_a_fragment(token: str) -> None:
+    # 떼고 남은 어간이 두 글자 미만이면 떼지 않는다 — '치과'가 '치'가 되면
+    # 아무 데나 걸린다.
+    assert stem(token) == token
+
+
+def test_inflected_forms_collapse_to_one_token() -> None:
+    # 같은 말이 조사만 다를 때 한 낱말로 세어야 문서빈도가 맞는다.
+    assert len({stem(t) for t in ("대상", "대상에", "대상을", "대상의", "대상은")}) == 1
 
 
 # --- 근거 인용 ---

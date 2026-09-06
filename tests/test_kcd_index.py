@@ -150,3 +150,59 @@ def test_narrative_without_any_disease_yields_nothing() -> None:
     index = _index(("K64", "치질"))
 
     assert index.lookup("보험료를 더 냈으니 돌려주세요") == ()
+
+
+# --- 이름 중간의 괄호·쉼표 (notes/025) ---
+
+
+def test_mid_name_parenthetical_is_removed_not_truncated_at() -> None:
+    # 한때 첫 괄호부터 끝까지 잘랐다. 그러면 앞머리 수식어만 남고,
+    # '만성' 같은 분류 수식어가 통째로 열쇠가 된다.
+    full, _ = term_keys("만성 (소아기) 육아종성 질환")
+
+    assert "만성 육아종성 질환" in full
+    assert "만성" not in full
+
+
+def test_bracket_is_removed_too() -> None:
+    full, _ = term_keys("세포막수용체복합체[CR3]결손")
+
+    assert full == ["세포막수용체복합체 결손"]
+
+
+def test_comma_list_does_not_collapse_to_a_modifier() -> None:
+    # 쉼표가 나열일 때 자르면 '급성'만 남는다. 자른 결과가 조각이면
+    # 자르지 않은 이름을 쓴다.
+    full, tails = term_keys("급성, 재발성 또는 아급성 전방포도막염")
+
+    assert "급성" not in full
+    assert tails == ["전방포도막염"]
+
+
+def test_comma_qualifier_is_still_truncated() -> None:
+    # 뒷가지가 수식어일 때는 그대로 자른다.
+    full, _ = term_keys("악성신생물, 상세불명")
+
+    assert "악성신생물" in full
+
+
+def test_classifier_words_are_not_index_keys() -> None:
+    # 이 낱말들이 열쇠가 되면 청구 서술의 '특정부위'가 F40을 물어 오고,
+    # 코드가 붙으면 **확실** 면책이 된다 — 근거 없는 부지급이다.
+    # 상병마스터의 실제 이름 형태를 그대로 쓴다.
+    index = _index(
+        ("F400", "특정(개별) 공포증"),
+        ("D71", "만성 (소아기) 육아종성 질환"),
+        ("H200", "급성, 재발성 또는 아급성 홍채염"),
+    )
+
+    for word in ("특정", "만성", "급성"):
+        assert index.lookup(f"{word}부위 치료를 받았습니다") == (), word
+
+
+def test_real_two_character_disease_names_survive() -> None:
+    # 수식어를 걷어 내면서 진짜 두 글자 병명까지 잃으면 안 된다.
+    index = _index(("K64", "치질"), ("E66", "비만"))
+
+    assert index.lookup("치질 수술을 받았습니다") == ("K64",)
+    assert index.lookup("비만 치료") == ("E66",)
