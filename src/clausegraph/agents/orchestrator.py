@@ -147,6 +147,7 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
         amount_computed=computed.computed, uncertain=bool(uncertain),
         masked=masked, amount=computed.value,
         amount_is_upper_bound=computed.is_upper_bound,
+        amount_is_lower_bound=computed.is_lower_bound,
     )
 
 
@@ -163,6 +164,7 @@ def _finalize(
     masked: bool,
     amount: int = 0,
     amount_is_upper_bound: bool = False,
+    amount_is_lower_bound: bool = False,
 ) -> Adjudication:
     started = time.perf_counter()
     draft = Adjudication(
@@ -180,6 +182,7 @@ def _finalize(
         amount_computed=amount_computed,
         has_uncertain_exclusion=uncertain,
         amount_is_upper_bound=amount_is_upper_bound,
+        amount_is_lower_bound=amount_is_lower_bound,
     )
     verdict = StepResult(
         step="검증/심판",

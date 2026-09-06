@@ -66,6 +66,10 @@ class ClaimHistory(BaseModel):
     outpatient_visits_this_year: int = Field(
         default=0, description="그 보장종목의 올해 통원 횟수(특약2는 일수)"
     )
+    self_paid_this_year: int = Field(
+        default=0,
+        description="올해 자기부담 누적(원). 급여 입원의 200만원 상한 판정에 쓴다",
+    )
 
 
 class Evidence(BaseModel):

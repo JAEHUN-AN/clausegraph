@@ -82,6 +82,15 @@ class AmountRule:
     # 연간 통원 횟수(특약2는 일수) 한도. 계약의 누적 횟수를 알아야 판정할 수
     # 있으므로 `ClaimHistory` 없이는 지급액을 단정하지 못한다.
     annual_visit_limit: int | None = None
+    # 급여 입원의 자기부담 연간 상한(제5조 ④).
+    #
+    #   "입원의 경우 … 본인부담금의 20%에 해당하는 금액이 … 연간 200만원을
+    #    초과하는 경우 **그 초과금액은** 제1항의 한도내에서 **보상합니다**"
+    #
+    # 이 조항은 방향이 반대다 — 알수록 **더** 지급한다. 그래서 누적을 모르면
+    # 우리 계산은 과소지급이 되고, 상한이 아니라 하한이 된다(notes/028).
+    # 비급여 특약에는 이 조항이 없다.
+    self_pay_annual_cap: int | None = None
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
@@ -142,6 +151,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=BENEFIT,
         coverage="(1)상해급여",
+        self_pay_annual_cap=2_000_000,  # 제5조 ④ 입원 자기부담 연 200만원
         inpatient_rate=0.80,
         outpatient_rate=1.00,
         annual_limit=50_000_000,
@@ -156,6 +166,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=BENEFIT,
         coverage="(2)질병급여",
+        self_pay_annual_cap=2_000_000,  # 제5조 ④ 입원 자기부담 연 200만원
         inpatient_rate=0.80,
         outpatient_rate=1.00,
         annual_limit=50_000_000,

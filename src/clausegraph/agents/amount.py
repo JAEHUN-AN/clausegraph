@@ -48,6 +48,14 @@ class Amount:
     is_upper_bound: bool = False
     # 상한이 된 이유. 무엇이 없어서 못 정했는지 사람이 알아야 한다.
     missing: tuple[str, ...] = ()
+    # **반대 방향의 누락도 있다.** 급여 입원의 자기부담 200만원 상한은
+    # 누적을 알수록 지급액이 **커진다**. 그 값을 모르면 우리 계산은 실제보다
+    # 작을 수 있고, 그때 이 금액은 상한이 아니라 **하한**이다.
+    #
+    # 두 방향을 한 깃발에 담지 않는다. 담으면 "상한"이라는 말의 뜻이 흐려지고,
+    # 청구인이 덜 받는 쪽 위험이 보험사가 더 주는 쪽 위험에 묻힌다(notes/028).
+    is_lower_bound: bool = False
+    missing_downward: tuple[str, ...] = ()
 
 
 def compute(
@@ -90,6 +98,7 @@ def compute(
 
     steps: list[str] = []
     missing: list[str] = []
+    missing_downward: list[str] = []
 
     # 1. 공제 — 통원에만. 약관은 여러 항 중 **큰 금액**을 빼라고 한다.
     #    항을 하나라도 빼먹으면 공제를 덜 빼게 되고, 그건 곧 과다지급이다.
@@ -140,6 +149,27 @@ def compute(
             )
             payable = 0
 
+    # 4-1. 자기부담 연간 상한 — 알수록 **더** 지급하는 조항이다.
+    #
+    #      "입원의 경우 … 본인부담금의 20%에 해당하는 금액이 … 연간 200만원을
+    #       초과하는 경우 그 초과금액은 제1항의 한도내에서 보상합니다"
+    #
+    #      자기부담 누적이 상한을 넘으면 넘은 만큼을 돌려준다. 그래서 누적을
+    #      모르면 우리가 **덜** 계산한 것이고, 그 금액은 하한이다.
+    cap = rule.self_pay_annual_cap if inpatient else None
+    if cap is not None:
+        if history is None:
+            missing_downward.append("올해 자기부담 누적")
+        else:
+            self_paid_now = claimed_amount - payable
+            over = history.self_paid_this_year + self_paid_now - cap
+            refund = max(0, min(self_paid_now, over))
+            if refund:
+                payable += refund
+                steps.append(
+                    f"자기부담 연 {cap:,}원 상한 초과분 {refund:,}원을 더 보상"
+                )
+
     # 5. 연간한도 — 이미 지급된 금액을 뺀 잔액이 상한이다.
     #
     #    **기지급액을 0으로 두지 않는다.** 0으로 두면 모든 청구를 그 해 첫
@@ -156,6 +186,11 @@ def compute(
 
     if missing:
         steps.append(f"{', '.join(missing)}을 확인하지 못해 이 금액은 상한이다")
+    if missing_downward:
+        steps.append(
+            f"{', '.join(missing_downward)}을 확인하지 못해 이 금액은 하한이다 "
+            "— 청구인이 더 받을 수 있다"
+        )
 
     return Amount(
         payable,
@@ -164,6 +199,8 @@ def compute(
         source_articles=rule.source_articles,
         is_upper_bound=bool(missing),
         missing=tuple(missing),
+        is_lower_bound=bool(missing_downward),
+        missing_downward=tuple(missing_downward),
     )
 
 

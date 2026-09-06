@@ -112,6 +112,15 @@ SCENARIOS = (
         " 400,000원 청구합니다.",
         ClaimHistory(paid_this_year=0, outpatient_visits_this_year=100),
     ),
+    # 자기부담 200만원 상한(제5조 ④)은 방향이 반대인 유일한 조항이다 —
+    # 누적을 알수록 **더** 지급한다(notes/028).
+    (
+        "CLM-012",
+        BENEFIT,
+        date(2025, 4, 1),
+        "2026.9.3 폐렴(J18)으로 10일간 입원했습니다. 3,000,000원 청구합니다.",
+        ClaimHistory(paid_this_year=2_000_000, self_paid_this_year=1_500_000),
+    ),
 )
 
 

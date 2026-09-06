@@ -1,8 +1,12 @@
 """가드레일 — 판정이 넘지 말아야 할 선.
 
 공고의 "핵심 업무 시스템 연동 및 안전장치(가드레일) 설계"에 대응한다.
-다섯 다 **판정을 더 보수적인 쪽으로만** 움직인다. 가드레일이 지급을 만들어
+여섯 다 **판정을 더 보수적인 쪽으로만** 움직인다. 가드레일이 지급을 만들어
 내는 일은 없다.
+
+다섯은 **보험사가 더 주는 위험**을 막는다. 마지막 하나는 방향이 반대다 —
+`amount_lower_bound`는 **청구인이 덜 받는 위험**을 막는다. 부지급도 사고지만
+과소지급도 사고이고, 분쟁조정사례의 상당수가 그쪽이다(notes/028).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ AMOUNT_NOT_COMPUTED = "amount_not_computed"
 UNCERTAIN_EXCLUSION = "uncertain_exclusion"
 PII_MASKED = "pii_masked"
 AMOUNT_UPPER_BOUND = "amount_upper_bound"
+AMOUNT_LOWER_BOUND = "amount_lower_bound"
 
 
 def mask_pii(text: str) -> tuple[str, bool]:
@@ -40,6 +45,7 @@ def apply(
     amount_computed: bool,
     has_uncertain_exclusion: bool,
     amount_is_upper_bound: bool = False,
+    amount_is_lower_bound: bool = False,
 ) -> Adjudication:
     """판정에 가드레일을 건다. 통과하지 못하면 강등한다."""
     triggered = list(adjudication.guardrails)
@@ -77,6 +83,18 @@ def apply(
         triggered.append(AMOUNT_UPPER_BOUND)
         decision = Decision.HUMAN_REVIEW
         reason = "공제를 끝까지 계산하지 못했다 — 계산된 금액은 상한이다"
+        amount = 0
+
+    # 5. 계산이 실제보다 **작을** 수 있으면 그것도 사람에게 넘긴다.
+    #    다른 가드레일과 방향이 반대다 — 이건 청구인을 위한 것이다.
+    #    이 금액을 그대로 지급하면 받아야 할 것을 덜 주게 된다.
+    if decision in (Decision.PAID, Decision.PARTIAL) and amount_is_lower_bound:
+        triggered.append(AMOUNT_LOWER_BOUND)
+        decision = Decision.HUMAN_REVIEW
+        reason = (
+            "계산된 금액이 실제보다 작을 수 있다 — 청구인이 더 받을 수 있으므로 "
+            "심사자 확인이 필요하다"
+        )
         amount = 0
 
     return adjudication.model_copy(

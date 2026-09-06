@@ -169,6 +169,88 @@ def test_clause_without_a_proviso_is_untouched() -> None:
     assert matchable(clause) == clause
 
 
+# --- 자기부담 연 200만원 상한 (방향이 반대인 조항) ---
+
+
+def _benefit_inpatient_rule():
+    return next(r for r in RULES if r.self_pay_annual_cap is not None)
+
+
+def test_self_pay_cap_pays_back_the_excess() -> None:
+    # "본인부담금의 20%가 연간 200만원을 초과하는 경우 그 초과금액은 보상합니다"
+    rule = _benefit_inpatient_rule()
+    claimed = 3_000_000
+    self_paid_now = claimed - int(claimed * rule.inpatient_rate)   # 60만원
+
+    result = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(self_paid_this_year=1_500_000),
+    )
+
+    # 150만 + 60만 = 210만 -> 10만원 초과분을 더 준다.
+    over = 1_500_000 + self_paid_now - rule.self_pay_annual_cap
+    assert result.value == int(claimed * rule.inpatient_rate) + over
+
+
+def test_self_pay_cap_already_exhausted_pays_everything() -> None:
+    rule = _benefit_inpatient_rule()
+    claimed = 3_000_000
+
+    result = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(self_paid_this_year=rule.self_pay_annual_cap),
+    )
+
+    assert result.value == claimed
+
+
+def test_self_pay_cap_does_nothing_below_the_cap() -> None:
+    rule = _benefit_inpatient_rule()
+    claimed = 3_000_000
+
+    result = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(self_paid_this_year=0),
+    )
+
+    assert result.value == int(claimed * rule.inpatient_rate)
+    assert "상한 초과분" not in result.basis
+
+
+def test_unknown_self_pay_makes_the_amount_a_lower_bound() -> None:
+    # 이 조항은 알수록 더 지급한다. 모르면 우리가 덜 계산한 것이다.
+    rule = _benefit_inpatient_rule()
+
+    result = compute(
+        3_000_000, days_since_enrollment=800, rule=rule, inpatient=True
+    )
+
+    assert result.is_lower_bound is True
+    assert "올해 자기부담 누적" in result.missing_downward
+    assert "청구인이 더 받을 수 있다" in result.basis
+
+
+def test_self_pay_cap_is_inpatient_only() -> None:
+    # 조문이 "입원의 경우"라고 못박았다.
+    rule = _benefit_inpatient_rule()
+
+    result = compute(
+        3_000_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="의원", copay_rate=0.20,
+        history=ClaimHistory(self_paid_this_year=5_000_000),
+    )
+
+    assert result.is_lower_bound is False
+    assert "상한 초과분" not in result.basis
+
+
+def test_special_terms_have_no_self_pay_cap() -> None:
+    # 비급여 특약 제5조에는 이 조항이 없다.
+    for rule in RULES:
+        if rule.product != _benefit_inpatient_rule().product:
+            assert rule.self_pay_annual_cap is None, rule.coverage
+
+
 # --- 근거 인용 ---
 
 # 실제 항목이다. 뒤에 조문 상호참조가 붙어 있고, 앞머리에 면책의 주어가 있다.
@@ -569,6 +651,19 @@ def test_payment_of_an_upper_bound_goes_to_a_person() -> None:
     assert result.decision is Decision.HUMAN_REVIEW
     assert guardrails.AMOUNT_UPPER_BOUND in result.guardrails
     assert result.amount == 0
+
+
+def test_payment_of_a_lower_bound_goes_to_a_person() -> None:
+    # 방향이 반대인 유일한 가드레일 — 청구인이 덜 받는 위험을 막는다.
+    result = guardrails.apply(
+        _adjudication(Decision.PARTIAL, (_evidence(),)),
+        amount_computed=True, has_uncertain_exclusion=False,
+        amount_is_lower_bound=True,
+    )
+
+    assert result.decision is Decision.HUMAN_REVIEW
+    assert guardrails.AMOUNT_LOWER_BOUND in result.guardrails
+    assert "더 받을 수 있으므로" in result.reason
 
 
 def test_denial_is_not_disturbed_by_an_upper_bound() -> None:
