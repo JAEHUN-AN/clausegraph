@@ -13,7 +13,7 @@ from clausegraph.agents.amount_rules import RULES, find_rule
 from clausegraph.agents.exclusion import _quote, matchable, stem
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
-from clausegraph.agents.models import Adjudication, Decision, Evidence
+from clausegraph.agents.models import Adjudication, ClaimHistory, Decision, Evidence
 from clausegraph.agents.quote import TABLE_MARKER, prose_quote
 
 PRODUCT = "실손의료보험 특별약관1(중증 비급여 실손의료비)"
@@ -282,19 +282,26 @@ def test_copay_rate_term_is_included_when_given() -> None:
 
     with_rate = compute(
         500_000, days_since_enrollment=800, rule=rule, inpatient=False,
-        institution="상급종합병원", copay_rate=0.60,
+        institution="상급종합병원", copay_rate=0.60, history=ClaimHistory(),
     )
 
     assert with_rate.is_upper_bound is False
-    assert with_rate.value == int((500_000 - 300_000) * rule.rate_for(inpatient=False))
+    # 공제 30만원을 뺀 20만원. 통원 1회 한도(20만원)와 같아 그대로 남는다.
+    assert with_rate.value == 200_000
 
 
 def test_missing_copay_rate_makes_the_amount_an_upper_bound() -> None:
     rule = _benefit_rule()
 
+    # 통원 1회 한도(20만원)에 양쪽이 다 걸리지 않도록 작은 청구로 본다.
+    claimed = 300_000
     result = compute(
-        500_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        claimed, days_since_enrollment=800, rule=rule, inpatient=False,
         institution="상급종합병원",
+    )
+    with_rate = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=False,
+        institution="상급종합병원", copay_rate=0.60, history=ClaimHistory(),
     )
 
     # 계산 자체는 됐지만 공제를 덜 뺐을 수 있으므로 지급액이 아니라 상한이다.
@@ -302,7 +309,7 @@ def test_missing_copay_rate_makes_the_amount_an_upper_bound() -> None:
     assert result.is_upper_bound is True
     assert "건강보험 본인부담률" in result.missing
     # 항을 빼먹은 쪽이 더 크다 — 그래서 상한이다.
-    assert result.value > int((500_000 - 300_000) * rule.rate_for(inpatient=False))
+    assert result.value > with_rate.value
 
 
 def test_tertiary_institution_uses_the_larger_flat_deductible() -> None:
@@ -343,7 +350,8 @@ def test_special_terms_deductible_needs_no_extra_input() -> None:
     rule = next(r for r in RULES if not r.outpatient_deductible_uses_copay_rate)
 
     result = compute(
-        1_000_000, days_since_enrollment=800, rule=rule, inpatient=False
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        history=ClaimHistory(),
     )
 
     assert result.is_upper_bound is False
@@ -373,10 +381,14 @@ def test_inpatient_applies_only_the_rate() -> None:
 def test_outpatient_subtracts_the_larger_deductible_first() -> None:
     # "정액 또는 의료비의 N% 중 큰 금액"을 뺀 뒤 비율을 곱한다.
     rule = _complete_rule()
-    claimed = 1_000_000
+    # 통원 1회 한도(20만원)에 가리지 않도록 작은 청구로 본다.
+    claimed = 200_000
     deductible = max(rule.outpatient_deductible, int(claimed * rule.outpatient_deductible_rate))
 
-    result = compute(claimed, days_since_enrollment=800, rule=rule, inpatient=False)
+    result = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=False,
+        copay_rate=0.20, institution="의원", history=ClaimHistory(),
+    )
 
     assert result.value == int((claimed - deductible) * rule.rate_for(inpatient=False))
 
@@ -428,10 +440,50 @@ def test_already_paid_reduces_the_remaining_limit() -> None:
         days_since_enrollment=800,
         rule=rule,
         inpatient=True,
-        already_paid_this_year=spent,
+        history=ClaimHistory(paid_this_year=spent),
     )
 
     assert result.value == 100_000
+
+
+def test_unknown_history_makes_the_amount_an_upper_bound() -> None:
+    # 누적을 0으로 두면 모든 청구가 그 해 첫 청구가 된다 — 조용한 과다지급이다.
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=_complete_rule(), inpatient=True
+    )
+
+    assert result.computed is True
+    assert result.is_upper_bound is True
+    assert "올해 기지급액" in result.missing
+
+
+def test_exhausted_visit_count_pays_nothing() -> None:
+    rule = next(r for r in RULES if r.annual_visit_limit is not None)
+
+    result = compute(
+        1_000_000,
+        days_since_enrollment=800,
+        rule=rule,
+        inpatient=False,
+        history=ClaimHistory(outpatient_visits_this_year=rule.annual_visit_limit),
+    )
+
+    assert result.value == 0
+    assert "연간 한도" in result.basis
+
+
+def test_visit_count_limit_is_not_applied_to_inpatient() -> None:
+    rule = next(r for r in RULES if r.annual_visit_limit is not None)
+
+    result = compute(
+        1_000_000,
+        days_since_enrollment=800,
+        rule=rule,
+        inpatient=True,
+        history=ClaimHistory(outpatient_visits_this_year=999),
+    )
+
+    assert result.value > 0
 
 
 def test_missing_incident_date_is_not_computed() -> None:

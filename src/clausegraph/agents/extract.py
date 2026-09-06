@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from datetime import date
 
-from .models import Claim
+from .models import Claim, ClaimHistory
 
 # KCD-8 코드 표기: 영문 1자 + 숫자 2자 (+ 소수점 세분류)
 _KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
@@ -32,14 +32,21 @@ def extract_claim(
     narrative: str,
     *,
     enrich: Enricher | None = None,
+    history: ClaimHistory | None = None,
 ) -> Claim:
-    """서술에서 사실을 뽑아 Claim을 만든다."""
+    """서술에서 사실을 뽑아 Claim을 만든다.
+
+    `history`는 서술에서 뽑지 않는다 — 올해 기지급액과 통원 횟수는 청구인이
+    적는 것이 아니라 **보험사 시스템이 아는 값**이다. 없으면 없는 대로 두고,
+    계산기가 지급액 대신 상한을 말한다(notes/027).
+    """
     codes = tuple(dict.fromkeys(_KCD_RE.findall(narrative)))
     if enrich is not None:
         codes = tuple(dict.fromkeys([*codes, *enrich(narrative)]))
 
     return Claim(
         claim_id=claim_id,
+        history=history,
         product=product,
         enrolled_on=enrolled_on,
         incident_on=_first_date(narrative),

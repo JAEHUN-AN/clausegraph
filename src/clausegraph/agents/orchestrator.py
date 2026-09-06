@@ -121,6 +121,7 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
             inpatient=claim.hospital_days > 0,
             institution=claim.institution,
             copay_rate=claim.copay_rate,
+            history=claim.history,
         ),
     )
     steps.append(

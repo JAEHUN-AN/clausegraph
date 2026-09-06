@@ -16,7 +16,7 @@ from datetime import date
 from neo4j import GraphDatabase
 
 from .extract import extract_claim
-from .models import Adjudication
+from .models import Adjudication, ClaimHistory
 from .orchestrator import adjudicate
 from .terminology import lookup
 
@@ -95,6 +95,23 @@ SCENARIOS = (
         "2026.8.1 교통사고로 3일간 입원했습니다. 자동차보험에서 치료관계비를 일부"
         " 받았고 본인부담의료비 800,000원을 청구합니다.",
     ),
+    # 아래 둘만 계약의 올해 누적을 함께 넣는다. 나머지는 그 값이 없어서
+    # 지급액 대신 상한만 나온다 — 그 차이를 나란히 본다(notes/027).
+    (
+        "CLM-010",
+        BENEFIT,
+        date(2025, 4, 1),
+        "2026.9.1 폐렴(J18)으로 5일간 입원했습니다. 2,000,000원 청구합니다.",
+        ClaimHistory(paid_this_year=1_500_000),
+    ),
+    (
+        "CLM-011",
+        NON_BENEFIT,
+        date(2026, 6, 1),
+        "2026.9.2 유방암(C50)으로 비급여 항암치료 통원을 받았습니다."
+        " 400,000원 청구합니다.",
+        ClaimHistory(paid_this_year=0, outpatient_visits_this_year=100),
+    ),
 )
 
 
@@ -122,10 +139,13 @@ def run(use_terminology: bool) -> int:
         auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"]),
     )
     try:
-        for claim_id, product, enrolled_on, narrative in SCENARIOS:
+        for scenario in SCENARIOS:
+            claim_id, product, enrolled_on, narrative = scenario[:4]
+            history = scenario[4] if len(scenario) > 4 else None
             claim = extract_claim(
                 claim_id, product, enrolled_on, narrative,
                 enrich=lookup if use_terminology else None,
+                history=history,
             )
             show(adjudicate(driver, claim))
     finally:

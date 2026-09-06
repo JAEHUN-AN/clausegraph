@@ -79,6 +79,9 @@ class AmountRule:
     # 경우에만 값이 들어간다. 근거 없는 감액은 과소지급이다.
     reduction_period_days: int | None = None
     reduction_rate: float | None = None
+    # 연간 통원 횟수(특약2는 일수) 한도. 계약의 누적 횟수를 알아야 판정할 수
+    # 있으므로 `ClaimHistory` 없이는 지급액을 단정하지 못한다.
+    annual_visit_limit: int | None = None
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
@@ -116,6 +119,9 @@ def _uid(product: str, number: str) -> str:
 
 # 급여 실손 — 제5조 ④ "본인부담금의 20%" -> 보상 80%,
 #             제5조 ① "합산하여 5천만원 이내",
+#             제5조 ⑤ "통원 1회당 20만원 이내" — 특약에만 있는 줄 알고
+#               빠뜨렸다가 실측으로 잡았다. 100만원 통원 청구에서 50만원
+#               과다지급이었다(notes/027).
 #             제3조 <표1> 통원 공제는 **세 항 중 큰 금액**이다.
 #               "1만원(상급종합ㆍ종합ㆍ전문요양기관은 2만원),
 #                보장대상 의료비의 20%,
@@ -139,6 +145,7 @@ RULES: tuple[AmountRule, ...] = (
         inpatient_rate=0.80,
         outpatient_rate=1.00,
         annual_limit=50_000_000,
+        outpatient_visit_limit=200_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
         outpatient_deductible_tertiary=20_000,
@@ -152,6 +159,7 @@ RULES: tuple[AmountRule, ...] = (
         inpatient_rate=0.80,
         outpatient_rate=1.00,
         annual_limit=50_000_000,
+        outpatient_visit_limit=200_000,
         outpatient_deductible=10_000,
         outpatient_deductible_rate=0.20,
         outpatient_deductible_tertiary=20_000,
@@ -162,6 +170,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(1)상해비급여",
+        annual_visit_limit=100,  # 제5조 ③ 연간 통원 100회
         inpatient_rate=0.70,
         outpatient_rate=1.00,
         annual_limit=50_000_000,
@@ -174,6 +183,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(2)질병비급여",
+        annual_visit_limit=100,  # 제5조 ③ 연간 통원 100회
         inpatient_rate=0.70,
         outpatient_rate=1.00,
         annual_limit=50_000_000,
@@ -186,6 +196,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(1)상해비급여",
+        annual_visit_limit=100,  # 제5조 ③ 연간 통원 100일
         inpatient_rate=0.50,
         outpatient_rate=1.00,
         annual_limit=10_000_000,
@@ -198,6 +209,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(2)질병비급여",
+        annual_visit_limit=100,  # 제5조 ③ 연간 통원 100일
         inpatient_rate=0.50,
         outpatient_rate=1.00,
         annual_limit=10_000_000,
@@ -216,6 +228,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(3)3대비급여-근골격계이학요법치료ㆍ체외충격파치료",
+        annual_visit_limit=50,
         inpatient_rate=1.00,
         outpatient_rate=1.00,
         annual_limit=3_500_000,
@@ -228,6 +241,7 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(3)3대비급여-주사료",
+        annual_visit_limit=50,
         inpatient_rate=1.00,
         outpatient_rate=1.00,
         annual_limit=2_500_000,

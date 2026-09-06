@@ -42,7 +42,30 @@ class Claim(BaseModel):
         default=None,
         description="건강보험 본인부담률. 영수증에서 오는 값이며 약관에 없다",
     )
+    history: ClaimHistory | None = Field(
+        default=None,
+        description="올해 누적. 없으면 지급액이 아니라 상한만 말할 수 있다",
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
+
+
+class ClaimHistory(BaseModel):
+    """그 계약·그 보장종목의 **올해 누적**. 보험사 시스템이 준다.
+
+    이 시스템은 계약 상태의 저장소가 아니다. 연간한도는 이미 지급한 금액을
+    빼야 하고 통원 횟수 한도는 이미 쓴 횟수를 알아야 하는데, 둘 다 여기
+    없는 값이다.
+
+    **없으면 0으로 두지 않는다.** 0으로 두면 모든 청구를 그 해 첫 청구로
+    보게 되고, 그건 조용한 과다지급이다(notes/027).
+    """
+
+    model_config = {"frozen": True}
+
+    paid_this_year: int = Field(default=0, description="그 보장종목의 올해 기지급액(원)")
+    outpatient_visits_this_year: int = Field(
+        default=0, description="그 보장종목의 올해 통원 횟수(특약2는 일수)"
+    )
 
 
 class Evidence(BaseModel):

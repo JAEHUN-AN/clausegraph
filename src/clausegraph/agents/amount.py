@@ -13,6 +13,8 @@
   금액"처럼 비율을 명시하지만, 통원 행은 공제금액을 뺀 금액 자체를 보상금액으로
   정한다. 입원은 급여 80%ㆍ특약1 70%ㆍ특약2 50%, 통원은 모두 비율이 없다.
 - **연간한도**는 보장종목별로 따로 있고, 이미 지급된 금액을 뺀 잔액이 상한이다.
+  통원은 연간 **횟수** 한도도 따로 있다(특약 100회, 3대비급여 50회).
+  둘 다 **계약의 누적 상태**이고 이 시스템에 없다 — 청구가 들고 와야 한다.
 - **감액기간**은 보장개시 초기의 지급사유에 비율을 곱한다. 다른 요소를
   적용한 **뒤에** 곱한다 — 순서를 바꾸면 한도 판정이 달라진다. 다만
   **표준약관은 감액기간을 정하지 않는다.** 규칙이 값을 주지 않으면 이
@@ -27,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .amount_rules import AmountRule
+from .models import ClaimHistory
 
 # 급여 통원 공제의 정액이 커지는 의료기관. 순서가 중요하다 — "종합병원"이
 # "병원"을 포함하므로 큰 쪽을 먼저 본다.
@@ -53,9 +56,9 @@ def compute(
     *,
     rule: AmountRule | None = None,
     inpatient: bool = True,
-    already_paid_this_year: int = 0,
     institution: str | None = None,
     copay_rate: float | None = None,
+    history: ClaimHistory | None = None,
 ) -> Amount:
     """청구액과 약관 파라미터로 지급액을 계산한다."""
     if claimed_amount <= 0:
@@ -125,7 +128,25 @@ def compute(
             f"({period}일) 안이라 {reduction:.0%}"
         )
 
-    # 4. 연간한도 — 이미 지급된 금액을 뺀 잔액이 상한이다.
+    # 4. 연간 통원 횟수 — 다 쓰면 그 해에는 더 못 받는다.
+    #    누적 횟수는 계약의 상태이고 이 시스템에 없다.
+    if not inpatient and rule.annual_visit_limit is not None:
+        if history is None:
+            missing.append("올해 통원 횟수")
+        elif history.outpatient_visits_this_year >= rule.annual_visit_limit:
+            steps.append(
+                f"올해 통원 {history.outpatient_visits_this_year}회로 "
+                f"연간 한도 {rule.annual_visit_limit}회를 이미 채웠다"
+            )
+            payable = 0
+
+    # 5. 연간한도 — 이미 지급된 금액을 뺀 잔액이 상한이다.
+    #
+    #    **기지급액을 0으로 두지 않는다.** 0으로 두면 모든 청구를 그 해 첫
+    #    청구로 보게 되고, 한도를 이미 다 쓴 계약에 그대로 지급한다.
+    if history is None:
+        missing.append("올해 기지급액")
+    already_paid_this_year = history.paid_this_year if history else 0
     remaining = max(0, (rule.annual_limit or 0) - already_paid_this_year)
     if payable > remaining:
         steps.append(f"연간한도 잔액 {remaining:,}원으로 제한")

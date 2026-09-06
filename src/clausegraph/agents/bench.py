@@ -21,6 +21,7 @@ from neo4j import GraphDatabase
 
 from ..observability import REGISTRY, Registry
 from .extract import extract_claim
+from .models import ClaimHistory
 from .orchestrator import adjudicate
 from .terminology import lookup
 
@@ -52,20 +53,37 @@ CASES = (
 )
 
 
-def synthesize(count: int, rng: random.Random) -> list[tuple[str, date, str]]:
-    """상품·가입일·사유를 섞은 청구를 만든다."""
-    claims: list[tuple[str, date, str]] = []
+def synthesize(
+    count: int, rng: random.Random
+) -> list[tuple[str, date, str, ClaimHistory | None]]:
+    """상품·가입일·사유를 섞은 청구를 만든다.
+
+    계약의 올해 누적(기지급액·통원 횟수)도 함께 만든다. 이 값이 없으면
+    계산기가 지급액 대신 상한만 말하고 전부 사람에게 넘어가므로, 지급
+    경로의 지연이 측정되지 않는다. **넷 중 하나는 일부러 비워 둔다** —
+    그 경로도 실제로 쓰이기 때문이다(notes/027).
+    """
+    claims: list[tuple[str, date, str, ClaimHistory | None]] = []
     for index in range(count):
         product = rng.choice(PRODUCTS)
         enrolled_on = ENROLL_BASE + timedelta(days=rng.randrange(0, ENROLL_SPAN_DAYS))
         incident = enrolled_on + timedelta(days=rng.randrange(10, 300))
         narrative, amount = CASES[index % len(CASES)]
+        history = (
+            None
+            if index % 4 == 0
+            else ClaimHistory(
+                paid_this_year=rng.randrange(0, 3_000_000),
+                outpatient_visits_this_year=rng.randrange(0, 40),
+            )
+        )
         claims.append(
             (
                 product,
                 enrolled_on,
                 f"{incident.year}.{incident.month}.{incident.day} "
                 f"{narrative}. {amount} 청구합니다.",
+                history,
             )
         )
     return claims
@@ -87,14 +105,19 @@ def run(count: int) -> int:
     REGISTRY.reset()
     try:
         print(f"청구 {count}건 (웜업 {WARMUP_CLAIMS}건 별도 집계)\n")
-        for index, (product, enrolled_on, narrative) in enumerate(claims):
+        for index, (product, enrolled_on, narrative, history) in enumerate(claims):
             if index == WARMUP_CLAIMS:
                 for stats in REGISTRY.steps():
                     for sample in stats.samples:
                         warmup.record(stats.name, sample)
                 REGISTRY.reset()
             claim = extract_claim(
-                f"BENCH-{index:04d}", product, enrolled_on, narrative, enrich=lookup
+                f"BENCH-{index:04d}",
+                product,
+                enrolled_on,
+                narrative,
+                enrich=lookup,
+                history=history,
             )
             adjudicate(driver, claim)
     finally:
