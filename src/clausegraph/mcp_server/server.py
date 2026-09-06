@@ -348,6 +348,7 @@ def adjudicate_claim(
     paid_this_year: int = -1,
     outpatient_visits_this_year: int = -1,
     self_paid_this_year: int = -1,
+    room_charge: int = 0,
 ) -> str:
     """청구 한 건을 심사해 판정과 근거, 발동한 가드레일을 반환한다.
 
@@ -371,6 +372,11 @@ def adjudicate_claim(
     된다. 넣지 않으면 지급액 대신 **상한**(앞의 둘) 또는 **하한**(마지막)이
     나오고 판정은 `HUMAN_REVIEW`로 간다 — 그게 맞는 답이다
     (notes/027 · notes/028).
+
+    `room_charge`는 청구한 **비급여 병실료**다. 상급병실료 차액은 제3조 표의
+    별도 행이라 입원의료비와 따로 계산해 더한다. 상급병실을 쓰지 않았거나
+    청구에 포함하지 않았으면 0으로 둔다 — 이건 계약 상태가 아니라 **청구의
+    내용**이므로 0이 곧 "청구하지 않았다"는 뜻이고, 추측이 아니다(notes/029).
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
@@ -389,7 +395,13 @@ def adjudicate_claim(
         )
     )
     claim = extract_claim(
-        "MCP", product, parsed, narrative, enrich=lookup, history=history
+        "MCP",
+        product,
+        parsed,
+        narrative,
+        enrich=lookup,
+        history=history,
+        room_charge=max(0, room_charge),
     )
     result = adjudicate(driver(), claim)
     return _render(result, claim.diagnosis_codes)

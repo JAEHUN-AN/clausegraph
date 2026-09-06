@@ -121,6 +121,17 @@ SCENARIOS = (
         "2026.9.3 폐렴(J18)으로 10일간 입원했습니다. 3,000,000원 청구합니다.",
         ClaimHistory(paid_this_year=2_000_000, self_paid_this_year=1_500_000),
     ),
+    # 상급병실료 차액은 제3조 표의 별도 행이다 — 입원의료비와 따로 계산해
+    # 더하고, 1일 평균 병실료를 10만원으로 자른다(notes/029).
+    (
+        "CLM-013",
+        NON_BENEFIT,
+        date(2026, 6, 1),
+        "2026.9.5 급성 담낭염(K81)으로 5일간 입원했습니다."
+        " 비급여 의료비 1,000,000원 청구합니다.",
+        ClaimHistory(),
+        1_000_000,
+    ),
 )
 
 
@@ -151,10 +162,12 @@ def run(use_terminology: bool) -> int:
         for scenario in SCENARIOS:
             claim_id, product, enrolled_on, narrative = scenario[:4]
             history = scenario[4] if len(scenario) > 4 else None
+            room_charge = scenario[5] if len(scenario) > 5 else 0
             claim = extract_claim(
                 claim_id, product, enrolled_on, narrative,
                 enrich=lookup if use_terminology else None,
                 history=history,
+                room_charge=room_charge,
             )
             show(adjudicate(driver, claim))
     finally:

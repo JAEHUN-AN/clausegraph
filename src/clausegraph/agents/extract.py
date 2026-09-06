@@ -33,6 +33,7 @@ def extract_claim(
     *,
     enrich: Enricher | None = None,
     history: ClaimHistory | None = None,
+    room_charge: int = 0,
 ) -> Claim:
     """서술에서 사실을 뽑아 Claim을 만든다.
 
@@ -47,6 +48,7 @@ def extract_claim(
     return Claim(
         claim_id=claim_id,
         history=history,
+        room_charge=room_charge,
         product=product,
         enrolled_on=enrolled_on,
         incident_on=_first_date(narrative),

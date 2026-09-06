@@ -12,6 +12,8 @@
 - **보상비율**은 입원에만 붙는다. 제3조 표의 입원 행은 "…의 70%에 해당하는
   금액"처럼 비율을 명시하지만, 통원 행은 공제금액을 뺀 금액 자체를 보상금액으로
   정한다. 입원은 급여 80%ㆍ특약1 70%ㆍ특약2 50%, 통원은 모두 비율이 없다.
+- **상급병실료 차액**은 제3조 표의 별도 행이라 입원의료비와 따로 계산해
+  더한다. 1일 평균 병실료를 10만원으로 자른 뒤 50%를 지급한다.
 - **연간한도**는 보장종목별로 따로 있고, 이미 지급된 금액을 뺀 잔액이 상한이다.
   통원은 연간 **횟수** 한도도 따로 있다(특약 100회, 3대비급여 50회).
   둘 다 **계약의 누적 상태**이고 이 시스템에 없다 — 청구가 들고 와야 한다.
@@ -67,6 +69,8 @@ def compute(
     institution: str | None = None,
     copay_rate: float | None = None,
     history: ClaimHistory | None = None,
+    room_charge: int = 0,
+    hospital_days: int = 0,
 ) -> Amount:
     """청구액과 약관 파라미터로 지급액을 계산한다."""
     if claimed_amount <= 0:
@@ -125,6 +129,33 @@ def compute(
     if visit_limit is not None and payable > visit_limit:
         steps.append(f"통원 1회 한도 {visit_limit:,}원으로 제한")
         payable = visit_limit
+
+    # 2-2. 의원급 입원 1회당 한도 — 특약2에만 있다.
+    #
+    #      "「의료법」 제3조제2항에 의한 의료기관(종합병원은 제외)에서 발생한
+    #       비급여 의료비는 1회당 300만원을 한도로 합니다"
+    #
+    #      의료기관 종류를 모르면 한도를 걸지 못하고, 안 거는 쪽이 과다지급이다.
+    clinic_cap = rule.inpatient_clinic_cap if inpatient else None
+    if clinic_cap is not None:
+        if institution is None:
+            if "의료기관 종류" not in missing:
+                missing.append("의료기관 종류")
+        elif not _is_tertiary(institution) and payable > clinic_cap:
+            steps.append(f"의원급 입원 1회 한도 {clinic_cap:,}원으로 제한")
+            payable = clinic_cap
+
+    # 2-3. 상급병실료 차액 — 제3조 표의 **별도 행**이라 따로 계산해 더한다.
+    #
+    #      "비급여 병실료의 50%. 다만, 1일 평균금액 10만원을 한도로 하며,
+    #       1일 평균금액은 … 비급여 병실료 전체를 총 입원일수로 나누어 산출"
+    #
+    #      한도가 걸리는 대상을 뒤 문장이 "병실료 전체 ÷ 입원일수"로 못박으므로
+    #      **병실료의 평균**에 건다(notes/029).
+    if inpatient and room_charge > 0 and rule.room_charge_rate is not None:
+        recognized, room_step = _room_charge(rule, room_charge, hospital_days)
+        steps.append(room_step)
+        payable += recognized
 
     # 3. 감액기간 — 다른 요소를 적용한 뒤에 곱한다. 규칙이 정하지 않았으면
     #    (표준약관은 정하지 않는다) 건너뛴다.
@@ -202,6 +233,28 @@ def compute(
         is_lower_bound=bool(missing_downward),
         missing_downward=tuple(missing_downward),
     )
+
+
+def _is_tertiary(institution: str) -> bool:
+    return any(name in institution for name in TERTIARY_INSTITUTIONS)
+
+
+def _room_charge(rule: AmountRule, room_charge: int, hospital_days: int) -> tuple[int, str]:
+    """상급병실료 차액 지급액과 근거 문장.
+
+    입원일수를 모르면 1일 평균을 낼 수 없다. 그때는 한도를 걸지 못하므로
+    **병실료 전액을 인정한 것처럼 계산하지 않고** 한도를 하루치로 본다 —
+    입원 청구에 일수가 없으면 최소 하루다.
+    """
+    days = max(1, hospital_days)
+    cap = rule.room_charge_daily_cap
+    recognized_charge = room_charge if cap is None else min(room_charge, cap * days)
+    paid = int(recognized_charge * (rule.room_charge_rate or 0))
+    if cap is not None and recognized_charge < room_charge:
+        note = f"1일 평균 {cap:,}원 한도({days}일)로 {recognized_charge:,}원만 인정"
+    else:
+        note = f"병실료 {room_charge:,}원 전액 인정"
+    return paid, f"상급병실료 차액 {paid:,}원({note}, {rule.room_charge_rate:.0%})"
 
 
 def _outpatient_deductible(

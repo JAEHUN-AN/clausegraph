@@ -251,6 +251,122 @@ def test_special_terms_have_no_self_pay_cap() -> None:
             assert rule.self_pay_annual_cap is None, rule.coverage
 
 
+# --- 상급병실료 차액과 의원급 입원 한도 ---
+
+
+def _room_rule():
+    return next(r for r in RULES if r.room_charge_rate is not None)
+
+
+def test_room_charge_is_added_on_top_of_the_inpatient_amount() -> None:
+    # 제3조 표의 **별도 행**이다. 입원의료비와 따로 계산해 더한다.
+    rule = _room_rule()
+    claimed, room, days = 1_000_000, 300_000, 5
+
+    without = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), hospital_days=days,
+    )
+    with_room = compute(
+        claimed, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), room_charge=room, hospital_days=days,
+    )
+
+    assert with_room.value == without.value + int(room * rule.room_charge_rate)
+
+
+def test_room_charge_daily_average_is_capped() -> None:
+    # 100만원 / 5일 = 1일 평균 20만원 -> 10만원 한도로 잘려 50만원만 인정.
+    rule = _room_rule()
+
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), room_charge=1_000_000, hospital_days=5,
+    )
+
+    recognized = rule.room_charge_daily_cap * 5
+    assert "1일 평균" in result.basis
+    assert result.value == int(1_000_000 * rule.inpatient_rate) + int(
+        recognized * rule.room_charge_rate
+    )
+
+
+def test_room_charge_within_the_daily_average_is_paid_in_full() -> None:
+    # 같은 100만원이라도 10일 입원이면 1일 평균이 10만원이라 전액 인정된다.
+    rule = _room_rule()
+
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), room_charge=1_000_000, hospital_days=10,
+    )
+
+    assert "전액 인정" in result.basis
+    assert result.value == int(1_000_000 * rule.inpatient_rate) + int(
+        1_000_000 * rule.room_charge_rate
+    )
+
+
+def test_room_charge_is_inpatient_only() -> None:
+    rule = _room_rule()
+
+    result = compute(
+        1_000_000, days_since_enrollment=800, rule=rule, inpatient=False,
+        history=ClaimHistory(), room_charge=1_000_000, hospital_days=0,
+    )
+
+    assert "상급병실료" not in result.basis
+
+
+def _clinic_cap_rule():
+    return next(r for r in RULES if r.inpatient_clinic_cap is not None)
+
+
+def test_clinic_inpatient_cap_applies_below_general_hospital() -> None:
+    # "의료법 제3조제2항 의료기관(종합병원 제외)에서 발생한 비급여 의료비는
+    #  1회당 300만원을 한도로 합니다"
+    rule = _clinic_cap_rule()
+
+    result = compute(
+        8_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), institution="의원",
+    )
+
+    assert result.value == rule.inpatient_clinic_cap
+    assert "의원급 입원 1회 한도" in result.basis
+
+
+def test_clinic_cap_does_not_apply_to_a_general_hospital() -> None:
+    rule = _clinic_cap_rule()
+
+    result = compute(
+        8_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), institution="상급종합병원",
+    )
+
+    assert result.value == int(8_000_000 * rule.inpatient_rate)
+    assert "의원급 입원 1회 한도" not in result.basis
+
+
+def test_unknown_institution_cannot_apply_the_clinic_cap() -> None:
+    # 한도를 안 거는 쪽이 과다지급이므로 상한으로 표시한다.
+    rule = _clinic_cap_rule()
+
+    result = compute(
+        8_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), institution=None,
+    )
+
+    assert result.is_upper_bound is True
+    assert "의료기관 종류" in result.missing
+
+
+def test_only_the_mild_special_terms_have_a_clinic_cap() -> None:
+    # 특약1과 급여에는 이 조항이 없다. 있는 척하면 과소지급이다.
+    capped = {r.product for r in RULES if r.inpatient_clinic_cap is not None}
+
+    assert capped == {_clinic_cap_rule().product}
+
+
 # --- 근거 인용 ---
 
 # 실제 항목이다. 뒤에 조문 상호참조가 붙어 있고, 앞머리에 면책의 주어가 있다.

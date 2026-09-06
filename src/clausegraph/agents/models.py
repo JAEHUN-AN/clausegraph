@@ -46,6 +46,13 @@ class Claim(BaseModel):
         default=None,
         description="올해 누적. 없으면 지급액이 아니라 상한만 말할 수 있다",
     )
+    room_charge: int = Field(
+        default=0,
+        description=(
+            "청구한 비급여 병실료(원). 상급병실료 차액은 제3조 표의 별도 행이라"
+            " 입원의료비와 따로 계산한다. 0이면 상급병실료를 청구하지 않은 것이다"
+        ),
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
 

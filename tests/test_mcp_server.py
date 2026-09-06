@@ -103,6 +103,13 @@ def test_adjudication_tool_takes_the_contract_running_totals(tools) -> None:
     assert "self_paid_this_year" in properties
 
 
+def test_room_charge_is_exposed(tools) -> None:
+    # 상급병실료 차액은 별도 행이라 청구액과 따로 넣어야 계산된다(notes/029).
+    properties = tools["adjudicate_claim"].input_schema["properties"]
+
+    assert "room_charge" in properties
+
+
 def test_every_running_total_the_calculator_uses_is_exposed(tools) -> None:
     # 노출 계층은 감싸는 것이 아니라 두 번째 구현이다(notes/023). 계산기가
     # 쓰는 누적을 도구가 안 받으면 그 경로는 영원히 상한만 낸다.

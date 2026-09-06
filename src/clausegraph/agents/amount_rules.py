@@ -91,6 +91,27 @@ class AmountRule:
     # 우리 계산은 과소지급이 되고, 상한이 아니라 하한이 된다(notes/028).
     # 비급여 특약에는 이 조항이 없다.
     self_pay_annual_cap: int | None = None
+    # 상급병실료 차액. 제3조 표의 **별도 행**이다 — 입원의료비와 따로 계산해
+    # 더한다. 두 특약이 같은 문장을 쓴다.
+    #
+    #   "비급여 병실료의 50%. 다만, **1일 평균금액 10만원을 한도**로 하며,
+    #    1일 평균금액은 입원기간 동안 비급여 병실료 전체를 총 입원일수로
+    #    나누어 산출합니다."
+    #
+    # **어느 금액의 1일 평균인지 두 가지로 읽힌다.** 뒤 문장이 그것을
+    # "비급여 병실료 전체 ÷ 총 입원일수"로 못박으므로 **병실료의 평균**으로
+    # 읽었다. 지급액의 평균으로 읽으면 뒤 문장이 앞 문장과 어긋난다.
+    # 두 읽기의 차이는 한도에서 두 배다 — 근거와 함께 notes/029에 적었다.
+    room_charge_rate: float | None = None
+    room_charge_daily_cap: int | None = None
+    # 특약2 입원에만 있는 한도(제3조).
+    #
+    #   "다만, 「의료법」 제3조제2항에 의한 의료기관(동법 제3조의3에 의한
+    #    종합병원은 제외)에서 발생한 비급여 의료비는 **1회당 300만원**을
+    #    한도로 합니다."
+    #
+    # 의료기관 종류를 모르면 이 한도를 걸지 못하고, 안 거는 쪽이 과다지급이다.
+    inpatient_clinic_cap: int | None = None
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
@@ -181,6 +202,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(1)상해비급여",
+        room_charge_rate=0.50,
+        room_charge_daily_cap=100_000,
         annual_visit_limit=100,  # 제5조 ③ 연간 통원 100회
         inpatient_rate=0.70,
         outpatient_rate=1.00,
@@ -194,6 +217,8 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=SEVERE,
         coverage="(2)질병비급여",
+        room_charge_rate=0.50,
+        room_charge_daily_cap=100_000,
         annual_visit_limit=100,  # 제5조 ③ 연간 통원 100회
         inpatient_rate=0.70,
         outpatient_rate=1.00,
@@ -207,6 +232,9 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(1)상해비급여",
+        inpatient_clinic_cap=3_000_000,  # 제3조 의원급 입원 1회당 300만원
+        room_charge_rate=0.50,
+        room_charge_daily_cap=100_000,
         annual_visit_limit=100,  # 제5조 ③ 연간 통원 100일
         inpatient_rate=0.50,
         outpatient_rate=1.00,
@@ -220,6 +248,9 @@ RULES: tuple[AmountRule, ...] = (
     AmountRule(
         product=MILD,
         coverage="(2)질병비급여",
+        inpatient_clinic_cap=3_000_000,  # 제3조 의원급 입원 1회당 300만원
+        room_charge_rate=0.50,
+        room_charge_daily_cap=100_000,
         annual_visit_limit=100,  # 제5조 ③ 연간 통원 100일
         inpatient_rate=0.50,
         outpatient_rate=1.00,
