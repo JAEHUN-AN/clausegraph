@@ -21,7 +21,7 @@ from datetime import date
 
 from neo4j import Driver
 
-from ..law.appendix import Provision
+from ..law.appendix import Provision, same_product
 from .models import Evidence
 from .quote import prose_quote
 
@@ -33,6 +33,15 @@ RETURN v.effective_from AS effective_from,
        coalesce(p.included_products, []) AS included_products,
        coalesce(p.excluded_products, []) AS excluded_products
 ORDER BY v.effective_from
+"""
+
+_ARTICLE_SCOPED_PROVISIONS = """
+MATCH (v:Version {effective_from: $version})-[:HAS_PROVISION]->(p:Provision)
+WHERE p.article_scoped
+RETURN DISTINCT p.promulgated_on AS promulgated_on,
+       coalesce(p.article_scope_notes, []) AS notes,
+       coalesce(p.article_scope_products, []) AS products
+ORDER BY promulgated_on DESC
 """
 
 _COVERAGE_ARTICLES = """
@@ -110,6 +119,30 @@ def resolve_version(
         else:
             break
     return chosen
+
+
+def article_scoped_notes(driver: Driver, version: str, product: str) -> tuple[str, ...]:
+    """그 판본에서 **조문 일부만** 바꾼 부칙. 그 상품에 걸리는 것만.
+
+    이런 부칙으로는 버전을 옮기지 않는다(notes/030). 대신 그 사실을 답에
+    실어야 한다 — "이 판본이 적용된다"고만 말하면, 그 안에서 조문 몇 개는
+    아직 옛 내용이라는 사실이 사라진다.
+    """
+    with driver.session() as session:
+        rows = [dict(record) for record in session.run(
+            _ARTICLE_SCOPED_PROVISIONS, version=version
+        )]
+
+    notes: list[str] = []
+    for row in rows:
+        # 적용 단위와 그 단위의 상품이 같은 순서로 들어 있다.
+        for note, joined in zip(row["notes"], row["products"], strict=False):
+            names = tuple(name for name in joined.split(",") if name)
+            # 상품을 한정하지 않은 단위는 모든 상품에 해당한다.
+            if names and not any(same_product(name, product) for name in names):
+                continue
+            notes.append(f"공포 {row['promulgated_on']} — {note}")
+    return tuple(notes)
 
 
 def find_coverage(driver: Driver, product: str, version: str) -> tuple[Evidence, ...]:

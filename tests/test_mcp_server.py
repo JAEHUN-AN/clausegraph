@@ -103,6 +103,14 @@ def test_adjudication_tool_takes_the_contract_running_totals(tools) -> None:
     assert "self_paid_this_year" in properties
 
 
+def test_version_tool_warns_about_article_level_dates(tools) -> None:
+    # 판본이 정해져도 그 안의 조문 몇 개는 아직 옛 내용일 수 있다.
+    # 도구가 그 사실을 말하지 않으면 모델이 조문을 단정해서 인용한다.
+    description = tools["resolve_terms_version"].description
+
+    assert "상품마다 다르다" in description
+
+
 def test_room_charge_is_exposed(tools) -> None:
     # 상급병실료 차액은 별도 행이라 청구액과 따로 넣어야 계산된다(notes/029).
     properties = tools["adjudicate_claim"].input_schema["properties"]

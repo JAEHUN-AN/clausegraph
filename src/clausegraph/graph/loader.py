@@ -11,7 +11,7 @@ from typing import Any
 
 from neo4j import Driver
 
-from ..law.appendix import Provision
+from ..law.appendix import Provision, Scope
 from ..law.exclusion_table import parse_exclusion_table
 from ..law.models import Article, TermsDocument
 from ..law.parse_cli import is_exclusion
@@ -95,7 +95,10 @@ SET p.promulgated_on = row.promulgated_on,
     p.text = row.text,
     p.included_products = row.included_products,
     p.excluded_products = row.excluded_products,
-    p.applies_from = row.applies_from
+    p.applies_from = row.applies_from,
+    p.article_scoped = row.article_scoped,
+    p.article_scope_notes = row.article_scope_notes,
+    p.article_scope_products = row.article_scope_products
 MERGE (v)-[link:HAS_PROVISION]->(p)
 // is_own은 **관계**에 붙인다. Provision 노드는 여러 버전이 공유하므로
 // (부칙은 세칙 개정 이력 전체가 딸려 온다) 노드에 붙이면 한 부칙이 모든
@@ -222,9 +225,12 @@ def load_provisions(
     가려내야 한다. `own_promulgated_on`(그 버전을 만든 개정의 발령일자)과
     공포일자가 같은 것이 그것이다.
 
-    자신의 부칙이 신계약 기준이고 날짜 후보가 하나면 그 날짜를
-    `applies_from`으로 삼는다 — **세칙 시행일이 아니라 약관 적용일**이다.
-    후보가 여럿이면 단정하지 않고 시행일자를 그대로 쓴다.
+    자신의 부칙에서 **버전 전체에 걸리는 적용 단위**가 하나로 좁혀지면 그
+    날짜를 `applies_from`으로 삼는다 — **세칙 시행일이 아니라 약관 적용일**이다.
+
+    조문·별표 일부만 바꾼 적용 단위로는 버전을 옮기지 않는다. 옮기면 그
+    상품의 나머지 조문까지 새 판본으로 끌려간다. 대신 그런 적용 단위가
+    있다는 사실을 노드에 남겨, 사람이 봐야 할 자리를 감추지 않는다(notes/030).
 
     **적용일은 Version이 아니라 Provision에 붙인다.** 부칙이 상품을 한정하기
     때문이다 — 2026-05-06 개정은 적용일을 6월 6일로 미루면서 개인실손의료보험을
@@ -236,9 +242,13 @@ def load_provisions(
             own_promulgated_on is not None
             and provision.promulgated_on == own_promulgated_on
         )
-        applies_from = None
-        if is_own and provision.new_contracts_only and len(provision.candidate_dates) == 1:
-            applies_from = provision.candidate_dates[0].replace("-", "")
+        version_scope = provision.version_scope
+        applies_from = (
+            version_scope.applies_on.replace("-", "")
+            if is_own and version_scope is not None
+            else None
+        )
+        article_scopes = provision.article_scopes
         rows.append(
             {
                 "uid": provision_uid(provision.promulgated_on),
@@ -250,6 +260,16 @@ def load_provisions(
                 "applies_from": applies_from,
                 "included_products": list(provision.included_products),
                 "excluded_products": list(provision.excluded_products),
+                # 조문·별표만 바꾼 적용 단위. 버전을 옮기지 않고 표시만 한다.
+                #
+                # **적용 단위마다 따로 담는다.** 한 부칙 안에서 단위마다
+                # 상품이 다르므로, 하나로 뭉치면 자동차보험 조문 개정이
+                # 실손 조회에도 딸려 나온다.
+                "article_scoped": bool(article_scopes),
+                "article_scope_notes": [_scope_note(s) for s in article_scopes],
+                "article_scope_products": [
+                    ",".join(s.products) for s in article_scopes
+                ],
             }
         )
     if not rows:
@@ -375,3 +395,13 @@ def _table_rows(
 
 def _chunks(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return [rows[i : i + BATCH_SIZE] for i in range(0, len(rows), BATCH_SIZE)]
+
+
+def _scope_note(scope: Scope) -> str:
+    """적용 단위 하나를 사람이 읽을 한 줄로."""
+    target = f"제{'·'.join(scope.articles)}조" if scope.articles else ""
+    if scope.tables:
+        tables = f"별표{'·'.join(scope.tables)}"
+        target = f"{target} {tables}".strip()
+    products = ",".join(scope.products) or "별표15 전체"
+    return f"{scope.applies_on} {products} {target}".strip()

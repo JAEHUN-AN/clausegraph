@@ -24,7 +24,7 @@ from datetime import date
 from mcp.server.mcpserver import MCPServer
 from neo4j import GraphDatabase
 
-from ..agents.coverage import resolve_version
+from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.exclusion import enumerate_exclusions, screen
 from ..agents.extract import extract_claim
 from ..agents.kcd import matches
@@ -452,6 +452,18 @@ def _version_for_product(parsed: date, enrolled_on: str, product: str) -> str:
             f"주의: 세칙 시행일자로만 보면 {plain}이지만, 부칙이 이 상품의 "
             f"약관 적용일을 따로 정해 {version}이 적용된다."
         )
+
+    # **판본이 정해져도 그 안의 조문 몇 개는 아직 옛 내용일 수 있다.**
+    # 부칙이 조문 단위로 시행일을 따로 정하는 경우가 있고, 조문 단위 버전이
+    # 없는 지금 구조로는 그 조문만 되돌릴 수 없다(notes/030).
+    scoped = article_scoped_notes(driver(), version, product)
+    if scoped:
+        lines.append(
+            "주의: 이 판본에는 **조문 일부만** 시행일을 따로 정한 부칙이 있다. "
+            "아래 조문을 인용할 때는 그 시행일을 함께 확인해야 하고, "
+            "단정하지 말고 심사자 확인이 필요하다고 전할 것."
+        )
+        lines.extend(f"  {note}" for note in scoped)
     return "\n".join(lines)
 
 
