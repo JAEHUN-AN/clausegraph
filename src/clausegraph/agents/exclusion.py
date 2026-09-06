@@ -60,6 +60,31 @@ MIN_KEYWORD_LEN = 2
 # 이 정도로 둔다.
 MAX_DOCUMENT_FREQUENCY = 0.016
 
+
+# **문서빈도만으로는 더 못 가른다.** 문턱을 올려 놓친 것을 되찾으려 해 봤고,
+# 안 된다는 것을 숫자로 확인했다.
+#
+# `건강검진`은 조문 458개 중 9개에 나온다. 문턱(7)을 살짝 넘어 걸러지고,
+# 그래서 "예방목적의 건강검진 … 보상 대상에 해당하는지"라는 실제 분쟁에서
+# 면책을 하나도 못 짚었다(notes/025).
+#
+# 그래서 "긴 낱말은 조금 더 흔해도 된다"는 규칙을 시험했다 — 네 글자
+# 이상이면 문턱을 11까지 풀어 준다. 실제 분쟁 정답이 8/10 -> 9/10이 됐다.
+#
+# 그런데 같은 문턱으로 `통원치료`가 함께 들어왔다. 그 낱말이 든 면책은
+# **"의사가 통원치료가 가능하다는데 자의로 입원한 경우"** 이고, 통원 청구와는
+# 아무 상관이 없다. 통원은 실손 청구의 다수다.
+#
+#     건강검진  DF 9        통원치료  DF 9
+#
+# **두 낱말의 문서빈도가 같다.** 하나를 넣으면 반드시 다른 하나도 들어온다.
+# 합성 청구 195건으로 대가를 쟀다 — PARTIAL 26 -> 18, HUMAN_REVIEW 102 -> 110.
+# 청구의 4%가 틀린 이유로 자동 경로에서 빠진다.
+#
+# 정답 하나를 얻고 그 값을 치를 수는 없다. 되돌렸고, `건강검진` 사례는
+# 놓친 것으로 그대로 센다. 이 규칙의 한계는 문턱이 아니라 **문서빈도라는
+# 신호 자체**다 — 형태소 분석이나 도메인 불용어가 있어야 갈린다.
+
 # 버전이 고정되면 면책 목록과 변별어 사전도 고정이다.
 _EXCLUSION_CACHE: dict[tuple[str, str], list[dict[str, str]]] = {}
 _TOKEN_CACHE: dict[str, frozenset[str]] = {}
@@ -71,6 +96,22 @@ def clear_caches() -> None:
     _TOKEN_CACHE.clear()
     _distinctive_tokens_for.cache_clear()
 _TOKEN_RE = re.compile(r"[가-힣]{2,}")
+
+# **괄호 안의 '다만'은 그 항목의 예외다.** 거기 적힌 말은 면책의 표지가 아니라
+# 보상의 표지다. 표현 일치에 쓰면 정반대로 걸린다.
+#
+#     치과치료(K00∼K08, 다만, 안면부 골절로 발생한 의료비는 … 보상합니다)ㆍ한방치료(…)
+#
+# 이 조항에서 `골절`을 뽑으면 발목 골절 청구가 **치과치료 면책**에 걸린다.
+# 합성 청구 195건에서 이 한 낱말로 20건이 잘못 걸렸다(notes/025).
+#
+# 괄호를 통째로 지우지 않고 **'다만'이 든 괄호만** 지운다. 그래야 위 조항에서
+# `치과치료`와 `한방치료`가 둘 다 남는다.
+#
+# 괄호 밖의 '다만'은 건드리지 않는다. `산재보험에서 보상받는 의료비. 다만,
+# 본인부담의료비는 제3조에 따라 보상합니다` 에서 청구인이 다투는 말이
+# 바로 `본인부담의료비`이고, 그 조항을 보여 주는 것이 맞다.
+_PROVISO_PARENS_RE = re.compile(r"\([^()]*다만[^()]*\)")
 
 # 조사·어미. 어절에서 이걸 떼어야 '대상'과 '대상에'가 같은 말이 된다.
 #
@@ -250,9 +291,14 @@ def _tokens(text: str) -> set[str]:
     return {stem(token) for token in _TOKEN_RE.findall(text)}
 
 
+def matchable(clause: str) -> str:
+    """표현 일치에 쓸 부분만 남긴다 — 괄호 안 예외는 뺀다."""
+    return _PROVISO_PARENS_RE.sub(" ", clause)
+
+
 def _distinctive_overlap(clause: str, haystack: str, distinctive: frozenset[str]) -> str | None:
     """가장 긴 것부터 본다 — 긴 낱말일수록 우연히 겹칠 일이 적다."""
-    tokens = sorted(_tokens(clause), key=len, reverse=True)
+    tokens = sorted(_tokens(matchable(clause)), key=len, reverse=True)
     for token in tokens:
         if len(token) < MIN_KEYWORD_LEN or token not in distinctive:
             continue

@@ -10,7 +10,7 @@ import pytest
 from clausegraph.agents import guardrails
 from clausegraph.agents.amount import compute
 from clausegraph.agents.amount_rules import RULES, find_rule
-from clausegraph.agents.exclusion import _quote, stem
+from clausegraph.agents.exclusion import _quote, matchable, stem
 from clausegraph.agents.extract import extract_claim
 from clausegraph.agents.kcd import matches, parse_code_ranges
 from clausegraph.agents.models import Adjudication, Decision, Evidence
@@ -125,6 +125,48 @@ def test_short_word_is_not_stripped_into_a_fragment(token: str) -> None:
 def test_inflected_forms_collapse_to_one_token() -> None:
     # 같은 말이 조사만 다를 때 한 낱말로 세어야 문서빈도가 맞는다.
     assert len({stem(t) for t in ("대상", "대상에", "대상을", "대상의", "대상은")}) == 1
+
+
+# --- 괄호 안의 '다만'은 예외다 ---
+
+_DENTAL_CLAUSE = (
+    "치과치료(K00∼K08, 다만, 안면부 골절로 발생한 의료비는 치아관련 치료를 "
+    "제외하고 보상합니다)ㆍ한방치료(다만, 「의료법」 제2조에 따른 한의사를 제외한 "
+    "'의사'의 의료행위에 의해서 발생한 의료비는 보상합니다)"
+)
+
+
+def test_proviso_inside_parentheses_is_dropped_from_matching() -> None:
+    # 괄호 안 '다만'에 적힌 말은 보상의 표지다. 그걸로 면책을 짚으면
+    # 발목 골절 청구가 치과치료 면책에 걸린다.
+    body = matchable(_DENTAL_CLAUSE)
+
+    assert "골절" not in body
+    assert "의료법" not in body
+
+
+def test_both_exclusion_subjects_survive() -> None:
+    # 괄호를 통째로 지우면 '한방치료'까지 잃는다. '다만'이 든 괄호만 지운다.
+    body = matchable(_DENTAL_CLAUSE)
+
+    assert "치과치료" in body
+    assert "한방치료" in body
+
+
+def test_proviso_outside_parentheses_is_kept() -> None:
+    # 괄호 밖의 '다만'은 건드리지 않는다. 청구인이 다투는 말이 거기 있다.
+    clause = (
+        "산재보험에서 보상받는 의료비. 다만, 본인부담의료비는 "
+        "제3조(보장종목별 보상내용)에 따라 보상합니다."
+    )
+
+    assert "본인부담의료비" in matchable(clause)
+
+
+def test_clause_without_a_proviso_is_untouched() -> None:
+    clause = "정신 및 행동장애(F04∼F99)"
+
+    assert matchable(clause) == clause
 
 
 # --- 근거 인용 ---
