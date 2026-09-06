@@ -99,6 +99,19 @@ def test_adjudication_tool_takes_the_contract_running_totals(tools) -> None:
 
     assert "paid_this_year" in properties
     assert "outpatient_visits_this_year" in properties
+    # 자기부담 누적만 방향이 반대다 — 없으면 하한이 나온다(notes/028).
+    assert "self_paid_this_year" in properties
+
+
+def test_every_running_total_the_calculator_uses_is_exposed(tools) -> None:
+    # 노출 계층은 감싸는 것이 아니라 두 번째 구현이다(notes/023). 계산기가
+    # 쓰는 누적을 도구가 안 받으면 그 경로는 영원히 상한만 낸다.
+    from clausegraph.agents.models import ClaimHistory
+
+    properties = tools["adjudicate_claim"].input_schema["properties"]
+
+    for field in ClaimHistory.model_fields:
+        assert field in properties, field
 
 
 def test_running_totals_are_optional_and_say_so(tools) -> None:

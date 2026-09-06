@@ -347,6 +347,7 @@ def adjudicate_claim(
     narrative: str,
     paid_this_year: int = -1,
     outpatient_visits_this_year: int = -1,
+    self_paid_this_year: int = -1,
 ) -> str:
     """청구 한 건을 심사해 판정과 근거, 발동한 가드레일을 반환한다.
 
@@ -358,14 +359,18 @@ def adjudicate_claim(
     사용자에게 전하고, 지급/부지급을 단정하지 말 것. 지급액도 계산 근거가
     갖춰졌을 때만 나온다.
 
-    `paid_this_year`와 `outpatient_visits_this_year`는 **그 계약의 올해
-    누적**이다. 연간한도는 이미 지급한 금액을 빼야 하고 통원 횟수 한도는
-    이미 쓴 횟수를 알아야 판정된다. 약관에도 청구서에도 없는 값이므로
+    뒤의 셋은 **그 계약의 올해 누적**이다. 약관에도 청구서에도 없는 값이므로
     보험사 시스템에서 받아 넣어야 한다.
 
+    - `paid_this_year` — 연간한도에서 이미 지급한 금액을 뺀다
+    - `outpatient_visits_this_year` — 통원 횟수 한도(특약 100회) 소진 판정
+    - `self_paid_this_year` — 급여 **입원**의 자기부담 연 200만원 상한.
+      이것만 방향이 반대다. 넘긴 만큼을 **더** 지급한다.
+
     **모르면 넣지 말 것.** 값을 지어내면 한도를 다 쓴 계약에 그대로 지급하게
-    된다. 넣지 않으면 지급액 대신 **상한**이 나오고 판정은 `HUMAN_REVIEW`로
-    간다 — 그게 맞는 답이다(notes/027).
+    된다. 넣지 않으면 지급액 대신 **상한**(앞의 둘) 또는 **하한**(마지막)이
+    나오고 판정은 `HUMAN_REVIEW`로 간다 — 그게 맞는 답이다
+    (notes/027 · notes/028).
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
@@ -373,12 +378,14 @@ def adjudicate_claim(
 
     # 음수는 "주지 않았다"는 뜻이다. 0은 "올해 아무것도 안 받았다"이고,
     # 둘은 전혀 다른 말이다.
+    totals = (paid_this_year, outpatient_visits_this_year, self_paid_this_year)
     history = (
         None
-        if paid_this_year < 0 and outpatient_visits_this_year < 0
+        if all(value < 0 for value in totals)
         else ClaimHistory(
             paid_this_year=max(0, paid_this_year),
             outpatient_visits_this_year=max(0, outpatient_visits_this_year),
+            self_paid_this_year=max(0, self_paid_this_year),
         )
     )
     claim = extract_claim(
