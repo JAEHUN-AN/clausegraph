@@ -81,9 +81,22 @@ def parse_codes(
     return accepted[:limit], dropped
 
 
-def code_claim(narrative: str, client: LlmClient | None = None) -> CodingResult:
-    """서술에서 코드를 뽑는다. LLM이 없으면 규칙 표로 내려간다."""
+def code_claim(
+    narrative: str, client: LlmClient | None = None, *, fallback: bool = True
+) -> CodingResult:
+    """서술에서 코드를 뽑는다. LLM이 없으면 규칙 표로 내려간다.
+
+    `fallback=False`는 **측정용**이다. 심사 중에는 붙지 않는 LLM 때문에
+    멈추면 안 되니 규칙 표로 내려가는 게 맞지만, 모델을 재는 중에 그러면
+    규칙 표의 점수가 그 모델의 점수로 적힌다. 재는 쪽은 실패를 실패로
+    받아야 한다(notes/031).
+    """
     llm = client or LlmClient.from_env()
+    if not fallback:
+        raw = llm.complete(SYSTEM_PROMPT, narrative)
+        codes, dropped = parse_codes(raw)
+        return CodingResult(codes=codes, raw=raw.strip(), source="llm", dropped=dropped)
+
     if not llm.available():
         return CodingResult(codes=terminology.lookup(narrative), source="rules")
 
@@ -109,7 +122,11 @@ _NUMBER_RE = re.compile(r"\b(\d{1,2})\b")
 
 
 def select_options(
-    narrative: str, options: list[str], client: LlmClient | None = None
+    narrative: str,
+    options: list[str],
+    client: LlmClient | None = None,
+    *,
+    fallback: bool = True,
 ) -> tuple[tuple[int, ...], str]:
     """서술이 어느 항목에 해당하는지 고르게 한다. (고른 번호, 원문).
 
@@ -118,13 +135,20 @@ def select_options(
     (notes/012), 기억을 요구하지 않는 형태로 바꿔 본다.
 
     번호가 목록 범위를 벗어나면 버린다 — 없는 항목을 고르는 것은 환각이다.
+
+    `fallback=False`면 실패를 삼키지 않는다. 빈 결과로 내려가면 "아무것도
+    고르지 않았다"와 구별되지 않아, 부정 케이스에서 점수가 부풀려진다.
     """
     llm = client or LlmClient.from_env()
     listing = "\n".join(f"{index}) {label}" for index, label in enumerate(options, 1))
-    try:
-        raw = llm.complete(SELECT_PROMPT, f"청구 내용: {narrative}\n\n목록:\n{listing}")
-    except LlmUnavailableError:
-        return (), ""
+    prompt = f"청구 내용: {narrative}\n\n목록:\n{listing}"
+    if not fallback:
+        raw = llm.complete(SELECT_PROMPT, prompt)
+    else:
+        try:
+            raw = llm.complete(SELECT_PROMPT, prompt)
+        except LlmUnavailableError:
+            return (), ""
 
     text = raw.strip()
     if not text or text.upper().startswith("NONE"):

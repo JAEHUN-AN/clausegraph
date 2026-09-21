@@ -26,12 +26,14 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass, field
+from statistics import median
 
 from ..agents import terminology
 from ..agents.kcd import CodeRange
 from ..observability import Registry
-from .client import LlmClient
-from .coder import code_claim
+from .client import LlmUnavailableError
+from .coder import code_claim, select_options
+from .providers import Backend, discover
 
 
 @dataclass(frozen=True)
@@ -131,13 +133,36 @@ class Score:
     false_code: int = 0
     correct_none: int = 0
     latencies: list[float] = field(default_factory=list)
+    # 붙지 못한 호출. 0이 아니면 그 단의 점수는 읽지 않는다.
+    errors: int = 0
+
+    @property
+    def p50(self) -> float:
+        return median(self.latencies) if self.latencies else 0.0
+
+
+@dataclass
+class BackendResult:
+    """한 단의 측정 결과. 표를 만들 때 쓴다."""
+
+    label: str
+    onprem: bool
+    generation: Score
+    selection: Score
 
 
 def score(cases: tuple[Case, ...], produce, registry: Registry, label: str) -> Score:
     result = Score()
     for case in cases:
         started = time.perf_counter()
-        codes = produce(case.narrative)
+        try:
+            codes = produce(case.narrative)
+        except LlmUnavailableError as exc:
+            # 붙지 못한 것은 틀린 것과 다르다. 따로 센다 — 0이 아니면
+            # 그 단의 점수를 읽지 않는다.
+            result.errors += 1
+            print(f"  ! {case.narrative[:24]} — {exc}")
+            continue
         elapsed = (time.perf_counter() - started) * 1000
         registry.record(label, elapsed)
         result.latencies.append(elapsed)
@@ -160,6 +185,8 @@ def report(name: str, result: Score, cases: tuple[Case, ...]) -> None:
     expected = [case for case in cases if case.expected is not None]
     none_cases = [case for case in cases if case.expected is None]
     print(f"\n--- {name}")
+    if result.errors:
+        print(f"  붙지 못한 호출 {result.errors}건 — 아래 점수는 읽지 않는다")
     if expected:
         print(f"  구간 적중 {result.hit}/{len(expected)}   놓침 {result.miss}")
     if none_cases:
@@ -169,10 +196,117 @@ def report(name: str, result: Score, cases: tuple[Case, ...]) -> None:
         )
 
 
-def run(verbose: bool) -> int:
-    llm = LlmClient.from_env()
-    available = llm.available()
-    print(f"로컬 LLM {llm.base_url} — {'붙었다' if available else '붙지 않았다'}")
+def score_selection(backend: Backend, registry: Registry) -> Score:
+    """코드를 생성하는 대신 면책 목록에서 고르게 해 본다."""
+    result = Score()
+    for narrative, expected in SELECT_CASES:
+        started = time.perf_counter()
+        try:
+            picked, _ = select_options(
+                narrative, list(SELECT_OPTIONS), backend.client, fallback=False
+            )
+        except LlmUnavailableError as exc:
+            result.errors += 1
+            print(f"  ! {narrative[:24]} — {exc}")
+            continue
+        elapsed = (time.perf_counter() - started) * 1000
+        registry.record(f"{backend.key} 선택", elapsed)
+        result.latencies.append(elapsed)
+
+        if expected is None:
+            if picked:
+                result.false_code += 1
+            else:
+                result.correct_none += 1
+        elif expected in picked:
+            result.hit += 1
+        else:
+            result.miss += 1
+    return result
+
+
+def report_selection(name: str, result: Score) -> None:
+    positives = sum(1 for _, expected in SELECT_CASES if expected is not None)
+    negatives = len(SELECT_CASES) - positives
+    print(f"\n--- {name} — 생성이 아니라 선택")
+    if result.errors:
+        print(f"  붙지 못한 호출 {result.errors}건 — 아래 점수는 읽지 않는다")
+    print(f"  적중 {result.hit}/{positives}   놓침 {result.miss}")
+    print(
+        f"  아무것도 고르지 않아야 함 {result.correct_none}/{negatives}   "
+        f"헛짚음 {result.false_code}"
+    )
+
+
+def measure(backend: Backend, registry: Registry, verbose: bool) -> BackendResult:
+    """한 단을 잰다. 규칙 표로 내려가지 않게 `fallback=False`로 부른다."""
+    all_cases = CASES + CONTROL_CASES
+
+    def by_llm(narrative: str) -> tuple[str, ...]:
+        return code_claim(narrative, backend.client, fallback=False).codes
+
+    generation = score(all_cases, by_llm, registry, backend.key)
+    report(backend.label, generation, all_cases)
+
+    if verbose:
+        print("\n--- 응답 원문")
+        for case in all_cases:
+            try:
+                outcome = code_claim(case.narrative, backend.client, fallback=False)
+            except LlmUnavailableError:
+                continue
+            dropped = f"  버림={list(outcome.dropped)}" if outcome.dropped else ""
+            print(f"  {case.narrative[:34]:36s} -> {list(outcome.codes)}{dropped}")
+            if outcome.raw and outcome.raw != ", ".join(outcome.codes):
+                print(f"      원문 {outcome.raw[:70]!r}")
+
+    selection = score_selection(backend, registry)
+    report_selection(backend.label, selection)
+    return BackendResult(backend.label, backend.onprem, generation, selection)
+
+
+def summary(rules: Score, results: list[BackendResult]) -> None:
+    """한 표로 모은다.
+
+    폐쇄망 열을 정확도 옆에 둔다 — 이 둘을 같이 봐야 결정이 나온다.
+    프론티어가 이겨도 들여놓을 수 없으면 결정은 바뀌지 않는다.
+    """
+    cases = CASES + CONTROL_CASES
+    positives = sum(1 for case in cases if case.expected is not None)
+    negatives = len(cases) - positives
+    sel_pos = sum(1 for _, expected in SELECT_CASES if expected is not None)
+    sel_neg = len(SELECT_CASES) - sel_pos
+
+    print("\n\n=== 요약")
+    print(
+        f"{'방식':26s} {'생성 적중':>10s} {'헛짚음':>8s} "
+        f"{'선택 적중':>10s} {'선택 헛짚음':>12s} {'p50':>10s}  온프렘"
+    )
+    print("-" * 94)
+    print(
+        f"{'규칙 표':26s} {f'{rules.hit}/{positives}':>10s} "
+        f"{f'{rules.false_code}/{negatives}':>8s} {'-':>10s} {'-':>12s} "
+        f"{f'{rules.p50:.1f}ms':>10s}  예"
+    )
+    for item in results:
+        gen, sel = item.generation, item.selection
+        gen_cell = "붙지 못함" if gen.errors else f"{gen.hit}/{positives}"
+        sel_cell = "붙지 못함" if sel.errors else f"{sel.hit}/{sel_pos}"
+        print(
+            f"{item.label[:26]:26s} {gen_cell:>10s} "
+            f"{f'{gen.false_code}/{negatives}':>8s} {sel_cell:>10s} "
+            f"{f'{sel.false_code}/{sel_neg}':>12s} {f'{gen.p50:.1f}ms':>10s}  "
+            f"{'예' if item.onprem else '아니오'}"
+        )
+
+
+def run(verbose: bool, only: str | None) -> int:
+    backends = discover()
+    if only:
+        backends = tuple(item for item in backends if item.key == only)
+        if not backends:
+            print(f"'{only}' 단이 환경에 없다. 키를 .env에 넣었는지 보라.")
+            return 1
 
     registry = Registry()
     all_cases = CASES + CONTROL_CASES
@@ -180,57 +314,21 @@ def run(verbose: bool) -> int:
     rules = score(all_cases, terminology.lookup, registry, "규칙")
     report("규칙 표 (agents/terminology.py)", rules, all_cases)
 
-    if available:
+    results: list[BackendResult] = []
+    for backend in backends:
+        if not backend.client.available():
+            print(f"\n--- {backend.label} — 붙지 않았다 ({backend.client.base_url})")
+            continue
+        results.append(measure(backend, registry, verbose))
 
-        def by_llm(narrative: str) -> tuple[str, ...]:
-            return code_claim(narrative, llm).codes
+    if not results:
+        print("\n어느 단에도 붙지 못해 규칙 표만 측정했다.")
+        print("로컬은 docs/local-llm.md, 원격 키는 .env.example 참고.")
 
-        llm_score = score(all_cases, by_llm, registry, "LLM")
-        report("로컬 LLM (CPU)", llm_score, all_cases)
-
-        if verbose:
-            print("\n--- LLM 응답 원문")
-            for case in all_cases:
-                outcome = code_claim(case.narrative, llm)
-                dropped = f"  버림={list(outcome.dropped)}" if outcome.dropped else ""
-                print(f"  {case.narrative[:34]:36s} -> {list(outcome.codes)}{dropped}")
-                if outcome.raw and outcome.raw != ", ".join(outcome.codes):
-                    print(f"      원문 {outcome.raw[:70]!r}")
-        score_selection(llm, registry)
-    else:
-        print("\n로컬 LLM이 없어 규칙 경로만 측정했다.")
-        print("서버를 띄우는 방법은 docs/local-llm.md 참고.")
-
+    summary(rules, results)
     print()
     print(registry.report("변환 지연"))
     return 0
-
-
-def score_selection(llm: LlmClient, registry: Registry) -> None:
-    """코드를 생성하는 대신 면책 목록에서 고르게 해 본다."""
-    from .coder import select_options
-
-    hit = miss = false_pick = correct_none = 0
-    for narrative, expected in SELECT_CASES:
-        started = time.perf_counter()
-        picked, _ = select_options(narrative, list(SELECT_OPTIONS), llm)
-        registry.record("LLM 선택", (time.perf_counter() - started) * 1000)
-
-        if expected is None:
-            if picked:
-                false_pick += 1
-            else:
-                correct_none += 1
-        elif expected in picked:
-            hit += 1
-        else:
-            miss += 1
-
-    positives = sum(1 for _, expected in SELECT_CASES if expected is not None)
-    negatives = len(SELECT_CASES) - positives
-    print("\n--- 로컬 LLM, 생성이 아니라 선택")
-    print(f"  적중 {hit}/{positives}   놓침 {miss}")
-    print(f"  아무것도 고르지 않아야 함 {correct_none}/{negatives}   헛짚음 {false_pick}")
 
 
 def main() -> int:
@@ -245,8 +343,13 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="용어→코드 변환 평가")
     parser.add_argument("--verbose", action="store_true", help="LLM 응답 원문도 찍는다")
+    parser.add_argument(
+        "--provider",
+        choices=("local", "groq", "gemini"),
+        help="한 단만 잰다. 기본은 환경에 준비된 단 전부",
+    )
     args = parser.parse_args()
-    return run(args.verbose)
+    return run(args.verbose, args.provider)
 
 
 if __name__ == "__main__":
