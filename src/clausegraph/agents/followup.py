@@ -30,20 +30,20 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
+from .extract import parse_amounts
 from .models import Adjudication, Claim, Decision
 from .session import Session
 
 # 사실추출과 같은 표기를 본다. 여기서 값을 뽑으려는 게 아니라
 # "판정의 입력이 바뀌는가"만 가리면 된다.
 _KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
-_AMOUNT_RE = re.compile(r"([\d,]{4,})\s*원")
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
 
 # 올해 누적을 말하는 표현. 금액과 함께 와야 새 사실로 본다.
 _HISTORY_WORDS = ("이미 받", "기지급", "작년", "올해", "지난번", "전에 받", "누적")
 
-_WHY_WORDS = ("왜", "이유", "어째서", "무슨 근거", "납득")
+_WHY_WORDS = ("왜", "이유", "어째서", "무슨 근거", "납득", "때문")
 _DOCS_WORDS = ("서류", "무엇을 내", "뭘 내", "뭐 내", "제출", "보완", "추가로 필요")
 _AMOUNT_WORDS = ("금액", "얼마", "지급액", "계산", "얼마나")
 _CLAUSE_WORDS = ("조항", "약관", "몇 조", "어느 조", "근거 조")
@@ -67,8 +67,10 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
     """
     found: list[str] = []
 
-    amounts = {int(value.replace(",", "")) for value in _AMOUNT_RE.findall(question)}
-    known_amounts = {claim.claimed_amount, claim.room_charge}
+    # "300만원"과 "3,000,000원"은 같은 값이다. 표기가 달라도 같은 값이면
+    # 새 사실이 아니다 — `parse_amounts`가 단위를 풀어 준다.
+    amounts = set(parse_amounts(question))
+    known_amounts = _known_amounts(claim)
     fresh_amounts = amounts - known_amounts - {0}
 
     if fresh_amounts and any(word in question for word in _HISTORY_WORDS):
@@ -89,6 +91,30 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
         found.append("일자")
 
     return tuple(found)
+
+
+def _known_amounts(claim: Claim) -> set[int]:
+    """이 청구가 **이미 본** 금액들.
+
+    `claimed_amount`만 비교하면 안 된다. 청구 모델은 금액을 하나만 들고
+    있는데 사람의 말에는 여러 개가 나온다 — *"차량가액 300만원인데 수리비
+    400만원을 청구"* 에서 청구에 담기는 것은 앞의 하나뿐이다. 뒤의 값을
+    새 사실로 세면, 방금 한 말을 되풀이했을 뿐인데 재심사로 보낸다.
+    실제 분쟁 문장 160건 중 6건이 이 모양이었다(notes/033).
+
+    그래서 **청구가 만들어진 서술에 있던 금액 전부**를 아는 값으로 센다.
+    이미 한 번 말한 값은 새 사실이 아니다.
+    """
+    known = {claim.claimed_amount, claim.room_charge}
+    known.update(parse_amounts(claim.narrative))
+    if claim.history is not None:
+        known.update(
+            {
+                claim.history.paid_this_year,
+                claim.history.self_paid_this_year,
+            }
+        )
+    return known
 
 
 def _same_known_date(question: str, claim: Claim) -> bool:

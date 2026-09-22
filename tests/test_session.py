@@ -390,3 +390,37 @@ def test_diff_reports_decision_and_guardrail_changes() -> None:
 
     assert "HUMAN_REVIEW -> PARTIAL" in text
     assert "풀린 가드레일 amount_upper_bound" in text
+
+
+# --- 실제 말투의 금액 (평가셋이 잡은 것, notes/033) --------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "작년에 300만원 받았습니다",
+        "작년에 300만 원 받았습니다",
+        "작년에 3백만원 받았어요",
+        "작년에 이미 1,000만원 받았는데요",
+        "작년에 1억원 받았습니다",
+    ],
+)
+def test_korean_amount_units_are_read(question: str) -> None:
+    """사람은 "3,000,000원"이라고 쓰지 않는다. "300만원"이라고 쓴다.
+
+    이걸 놓치면 *"작년에 300만원 받았는데 왜 부지급이죠"* 가 `WHY`로 분류돼
+    **낡은 판정을 근거까지 붙여 설명하게 된다.** 이 기능이 막으려던 바로
+    그 실패다.
+    """
+    assert detect_new_facts(question, make_claim()) == ("올해누적",)
+
+
+def test_real_phrasing_of_the_canonical_case_is_new_facts() -> None:
+    question = "작년에 이미 300만 원 받았는데 왜 부지급이죠"
+
+    assert classify(question, make_claim()) is FollowUp.NEW_FACTS
+
+
+def test_unit_amount_equal_to_the_known_one_is_not_new() -> None:
+    # 120만원 = 1,200,000원. 표기만 다르고 같은 값이다.
+    assert detect_new_facts("120만원이 왜 안 나오나요", make_claim()) == ()
