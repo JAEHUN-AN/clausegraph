@@ -19,6 +19,7 @@ EXPECTED_TOOLS = {
     "adjudicate_claim",
     "follow_up",
     "revise_claim",
+    "triage_definition",
 }
 
 
@@ -203,3 +204,24 @@ def test_missing_session_does_not_pretend(tools) -> None:
 
     assert "찾지 못했다" in follow_up("nope", "왜요")
     assert "찾지 못했다" in revise_claim("nope", paid_this_year=100)
+
+
+def test_triage_tool_refuses_to_decide(tools) -> None:
+    # 판정하지 않는다는 것이 이 도구의 약속이다. 설명에 그게 없으면
+    # 모델이 해당/미해당을 말하게 된다.
+    description = tools["triage_definition"].description
+    assert "판정하지 않는다" in description
+    assert "단정하지 말 것" in description
+
+
+def test_triage_tool_says_when_it_is_the_right_call(tools) -> None:
+    # 언제 부르는지가 없으면 모델이 안 부른다.
+    description = tools["triage_definition"].description
+    assert "해석" in description
+
+
+def test_triage_needs_an_issue(tools) -> None:
+    # DB 없이 도는 경로 — 빈 입력은 그래프를 건드리기 전에 걸러야 한다.
+    from clausegraph.mcp_server.server import triage_definition
+
+    assert "쟁점 문장을 달라" in triage_definition("   ")

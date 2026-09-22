@@ -26,6 +26,8 @@ from mcp.server.mcpserver import MCPServer
 from neo4j import GraphDatabase
 
 from ..agents.coverage import article_scoped_notes, resolve_version
+from ..agents.definition_terms import TermIndex, terms_from_articles
+from ..agents.definition_triage import triage
 from ..agents.exclusion import enumerate_exclusions, screen
 from ..agents.extract import extract_claim
 from ..agents.followup import answer
@@ -104,6 +106,29 @@ RETURN p.promulgated_on AS promulgated_on,
 ORDER BY p.promulgated_on DESC
 LIMIT 5
 """
+
+
+# 정의 조문. 제목에 '정의'가 든 조문을 그대로 가져와 색인을 만든다
+# (notes/035). 판본을 가리지 않는다 — 어느 판본에도 없을 때만 "없다"고
+# 말해야 하므로 합집합이 맞다.
+_DEFINITION_ARTICLES = """
+MATCH (a:Article)
+WHERE a.title CONTAINS '정의'
+RETURN a.number AS number, a.title AS title, a.text AS text
+"""
+
+_term_index: TermIndex | None = None
+
+
+def term_index() -> TermIndex:
+    """용어 색인. 한 번 만들고 들고 있는다 — 약관은 프로세스 도는 동안
+    바뀌지 않는다."""
+    global _term_index
+    if _term_index is None:
+        with driver().session() as session:
+            rows = [dict(record) for record in session.run(_DEFINITION_ARTICLES)]
+        _term_index = terms_from_articles(rows)
+    return _term_index
 
 
 @mcp.tool()
@@ -410,6 +435,35 @@ def adjudicate_claim(
     rendered = _render(result, claim.diagnosis_codes)
     session = STORE.open(claim, result, rendered)
     return f"{rendered}\n대화 id {session.session_id} — 후속 질문은 `follow_up`."
+
+
+@mcp.tool()
+def triage_definition(issue: str) -> str:
+    """약관 **용어의 뜻**을 다투는 쟁점을 받아, 판단에 무엇이 필요한지 알려준다.
+
+    *"이 시술이 약관에서 정한 수술에 해당하나요"*, *"이 입원이 암의 치료를
+    직접 목적으로 한 입원인가요"* 처럼 **조문을 찾는 문제가 아니라 조문을
+    해석하는 문제**일 때 호출한다.
+
+    **판정하지 않는다.** 실제 분쟁 21건을 세어 보니 이런 쟁점은 상품 약관의
+    정의, 상품 분류표, 판례, 의무기록으로 갈렸고 그중 표준약관에 있는 것은
+    거의 없다(notes/034). 근거 없이 해당/미해당을 말하면 지어내는 것이다.
+
+    대신 이것들을 돌려준다.
+
+    - 다투는 용어가 **표준약관에 정의돼 있는가** — 조회 결과이며 추측이 아니다
+    - 정의는 있는데 **그 정의가 또 다른 문서를 가리키는가** (`장해` → `<부표 3>`)
+    - 무엇을 더 가져와야 하는가
+
+    **판례가 필요한지는 말하지 않는다.** 쟁점 문장만으로는 알 수 없다.
+
+    이 답을 사용자에게 전할 때 지급/부지급을 단정하지 말 것. 무엇을 확인해야
+    하는지만 전하고 최종 판단은 심사자에게 남긴다.
+    """
+    text = issue.strip()
+    if not text:
+        return "쟁점 문장을 달라. 무엇을 다투는지 있어야 무엇이 필요한지 말할 수 있다."
+    return triage(text, term_index()).render()
 
 
 @mcp.tool()
