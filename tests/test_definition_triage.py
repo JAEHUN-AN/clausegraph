@@ -181,3 +181,31 @@ def test_empty_index_does_not_claim_knowledge() -> None:
 
     assert not result.defined_in_standard_terms
     assert Need.TERMS in result.needs
+
+
+def test_index_builds_from_graph_shaped_rows() -> None:
+    """MCP는 그래프에서 정의 조문을 읽어 같은 색인을 만든다.
+
+    쿼리가 돌려주는 키(`number`/`title`/`text`)와 색인이 읽는 키가 어긋나면
+    색인이 **조용히 비고**, 트리아지는 모든 용어를 "정의 없음"으로 답한다.
+    빈 색인은 예외를 내지 않으므로 여기서 모양을 묶어 둔다.
+    """
+    # server.py의 _DEFINITION_ARTICLES가 돌려주는 모양 그대로.
+    rows = [
+        {
+            "number": "2",
+            "title": "용어의 정의",
+            "text": "가. 계약자: 회사와 계약을 체결하는 사람입니다.",
+        },
+        {
+            "number": "2",
+            "title": "용어의 정의",
+            "text": "나. 장해: <부표 3> 장해분류표에서 정한 상태입니다.",
+        },
+    ]
+
+    index = terms_from_articles(rows)
+
+    assert index.knows("계약자")
+    assert index.is_hollow("장해")
+    assert index.article_count == 2

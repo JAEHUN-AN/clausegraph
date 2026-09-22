@@ -147,9 +147,12 @@
 
 ## 범위
 
-- **MCP에 노출하지 않았다.** 색인이 `data/law/parsed`를 읽는데 MCP 서버는
-  그래프를 본다. 그래프의 정의 조문으로 색인을 만드는 것이 다음 일이고,
-  Neo4j 없이는 확인할 수 없어 이번에는 넣지 않았다.
+- **MCP 도구(`triage_definition`)는 붙였지만 실서버로 확인하지 못했다.**
+  색인을 그래프의 정의 조문에서 만들도록 했는데(제목에 '정의'가 든 Article),
+  로컬 Docker가 뜨지 않아 Neo4j를 띄우지 못했다. 쿼리가 돌려주는 키와
+  색인이 읽는 키가 어긋나면 **색인이 조용히 비고** 모든 용어가 "정의 없음"이
+  된다 — 예외가 나지 않는 실패라, 그 모양만 테스트로 묶어 뒀다
+  (`test_index_builds_from_graph_shaped_rows`). 실제 그래프 확인은 남아 있다.
 - 용어 뽑기는 따옴표 → 알려진 용어 목록 → `약관에서 정한 X` 순이다.
   21건에서는 전부 가렸지만 **그 21건을 보고 만든 목록**이다.
 - 규칙 기반이다. 쟁점 문장이 지금과 다른 말투로 오면 `_FACT_WORDS`·
@@ -160,5 +163,5 @@
 
 ```
 uv run python -m clausegraph.goldset.triage_eval
-uv run pytest tests/test_definition_triage.py -q   # 15건
+uv run pytest tests/test_definition_triage.py -q   # 16건
 ```
