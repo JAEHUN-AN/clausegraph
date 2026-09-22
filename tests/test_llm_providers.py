@@ -178,3 +178,17 @@ def test_frontier_is_not_onprem(monkeypatch: pytest.MonkeyPatch) -> None:
     onprem = {item.key: item.onprem for item in providers.discover()}
 
     assert onprem == {"local": True, "groq": True, "gemini": False}
+
+
+@responses.activate
+def test_empty_body_is_a_failure_not_a_none() -> None:
+    # 사고 모델이 배정된 토큰을 생각에 다 쓰면 본문이 빈 채로 온다.
+    # 이걸 통과시키면 그 단의 모든 답이 "코드 없음"으로 채점된다 —
+    # 부정 케이스는 만점, 긍정 케이스는 0점. 측정이 통째로 거짓이 된다.
+    responses.post(
+        CHAT_URL,
+        json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}]},
+    )
+
+    with pytest.raises(LlmUnavailableError, match="본문이 비어 있다"):
+        remote().complete("sys", "user")

@@ -32,7 +32,7 @@ from ..agents import terminology
 from ..agents.kcd import CodeRange
 from ..observability import Registry
 from .client import LlmUnavailableError
-from .coder import code_claim, select_options
+from .coder import CodingResult, code_claim, select_options
 from .providers import Backend, discover
 
 
@@ -242,21 +242,24 @@ def measure(backend: Backend, registry: Registry, verbose: bool) -> BackendResul
     """한 단을 잰다. 규칙 표로 내려가지 않게 `fallback=False`로 부른다."""
     all_cases = CASES + CONTROL_CASES
 
+    # 채점하면서 원문을 챙겨 둔다. 전에는 `--verbose`가 같은 케이스를 한 번
+    # 더 불렀는데, 그 때문에 호출이 두 배가 되어 무료 티어 한도를 넘겼다.
+    # 볼 것을 이미 받아 놓고 다시 물을 이유가 없다.
+    seen: list[tuple[str, CodingResult]] = []
+
     def by_llm(narrative: str) -> tuple[str, ...]:
-        return code_claim(narrative, backend.client, fallback=False).codes
+        outcome = code_claim(narrative, backend.client, fallback=False)
+        seen.append((narrative, outcome))
+        return outcome.codes
 
     generation = score(all_cases, by_llm, registry, backend.key)
     report(backend.label, generation, all_cases)
 
     if verbose:
         print("\n--- 응답 원문")
-        for case in all_cases:
-            try:
-                outcome = code_claim(case.narrative, backend.client, fallback=False)
-            except LlmUnavailableError:
-                continue
+        for narrative, outcome in seen:
             dropped = f"  버림={list(outcome.dropped)}" if outcome.dropped else ""
-            print(f"  {case.narrative[:34]:36s} -> {list(outcome.codes)}{dropped}")
+            print(f"  {narrative[:34]:36s} -> {list(outcome.codes)}{dropped}")
             if outcome.raw and outcome.raw != ", ".join(outcome.codes):
                 print(f"      원문 {outcome.raw[:70]!r}")
 

@@ -32,6 +32,11 @@ HEALTH_TIMEOUT_SEC = 5
 MAX_ATTEMPTS = 4
 RETRY_WAIT_MULTIPLIER_SEC = 2
 RETRY_WAIT_MAX_SEC = 30
+# 분당 창이 지나기를 기다린다. 창보다 짧게 물러서면 또 맞는다.
+RATE_LIMIT_WAIT_SEC = 65
+_BACKOFF = wait_exponential(
+    multiplier=RETRY_WAIT_MULTIPLIER_SEC, max=RETRY_WAIT_MAX_SEC
+)
 
 # 코드만 뽑는 일이라 길 필요가 없다. 길게 두면 모델이 설명을 붙인다.
 DEFAULT_MAX_TOKENS = 96
@@ -46,13 +51,30 @@ class LlmUnavailableError(RuntimeError):
     초과·429·5xx는 기다리면 되지만, 400이나 401은 몇 번을 걸어도 같다.
     """
 
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self, message: str, *, retryable: bool = False, rate_limited: bool = False
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.rate_limited = rate_limited
 
 
 def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, LlmUnavailableError) and exc.retryable
+
+
+def _wait_policy(retry_state: object) -> float:
+    """429는 창이 지나야 풀린다. 지수 백오프로는 같은 분 안에서 또 맞는다.
+
+    무료 티어는 분당으로 끊으므로, 물러설 때 **창 하나를 통째로 비운다.**
+    처음에 2초·4초로 물러섰다가 재시도가 같은 창에 요청을 더 쌓아 한도를
+    넘기는 것을 봤다 — 재시도가 스스로 원인이 됐다.
+    """
+    outcome = getattr(retry_state, "outcome", None)
+    exc = outcome.exception() if outcome is not None else None
+    if isinstance(exc, LlmUnavailableError) and exc.rate_limited:
+        return RATE_LIMIT_WAIT_SEC
+    return _BACKOFF(retry_state)
 
 
 # 기다리면 풀리는 상태 코드. 429는 무료 티어의 분당 상한이다.
@@ -75,6 +97,10 @@ class LlmClient:
     api_key: str = ""
     timeout_sec: int = DEFAULT_TIMEOUT_SEC
     local: bool = True
+    # 사고 모델은 생각한 토큰도 여기서 깎는다. 96으로는 본문이 비어서 오는
+    # 모델이 있어 단마다 다르게 준다 — 답을 담을 자리를 주는 것이지
+    # 정확도를 올려 주는 손잡이가 아니다(notes/031).
+    max_tokens: int = DEFAULT_MAX_TOKENS
     extra_body: dict[str, object] = field(default_factory=dict)
     min_interval_sec: float = 0.0
     session: requests.Session | None = None
@@ -123,9 +149,7 @@ class LlmClient:
         # 드러나지 않던 자리다.
         retry=retry_if_exception(_is_retryable),
         stop=stop_after_attempt(MAX_ATTEMPTS),
-        wait=wait_exponential(
-            multiplier=RETRY_WAIT_MULTIPLIER_SEC, max=RETRY_WAIT_MAX_SEC
-        ),
+        wait=_wait_policy,
         reraise=True,
     )
     def complete(
@@ -133,7 +157,7 @@ class LlmClient:
         system: str,
         user: str,
         *,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_tokens: int | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
     ) -> str:
         payload: dict[str, object] = {
@@ -141,7 +165,7 @@ class LlmClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature,
         }
         if self.local:
@@ -164,7 +188,9 @@ class LlmClient:
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else 0
             raise LlmUnavailableError(
-                f"LLM 호출 실패 {status}: {exc}", retryable=status in _RETRYABLE_STATUS
+                f"LLM 호출 실패 {status}: {exc}",
+                retryable=status in _RETRYABLE_STATUS,
+                rate_limited=status == 429,
             ) from exc
         except requests.RequestException as exc:
             # 끊긴 연결과 시간 초과. 상대가 잠깐 바쁜 것일 수 있다.
@@ -174,4 +200,15 @@ class LlmClient:
         choices = body.get("choices") or []
         if not choices:
             raise LlmUnavailableError(f"응답에 choices가 없다: {body}")
-        return (choices[0].get("message") or {}).get("content", "") or ""
+
+        choice = choices[0]
+        content = (choice.get("message") or {}).get("content", "") or ""
+        if not content.strip():
+            # 사고 모델이 배정된 토큰을 생각에 다 쓰면 본문이 빈 채로 온다
+            # (finish_reason=length). 빈 문자열을 그대로 돌려주면 파서가
+            # "코드 없음"으로 읽어 **모든 답이 NONE으로 채점된다.** 모델이
+            # 틀린 것이 아니라 답을 못 받은 것이므로 실패로 올린다.
+            raise LlmUnavailableError(
+                f"본문이 비어 있다 (finish_reason={choice.get('finish_reason')})"
+            )
+        return content

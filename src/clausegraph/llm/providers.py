@@ -31,11 +31,22 @@ from .client import LlmClient
 # 무료 티어의 분당 상한에 맞춘 호출 간격. 넉넉하게 잡는다 — 한 번 429를
 # 맞으면 백오프로 더 오래 기다리게 되므로 미리 벌리는 쪽이 빠르다.
 GROQ_INTERVAL_SEC = 2.5
-GEMINI_INTERVAL_SEC = 6.5
+# 사고 토큰이 출력 예산에서 깎인다. 96으로는 본문이 비어서 온다.
+GROQ_MAX_TOKENS = 512
+# 분당 20건이 한도다. 재시도도 그 창에 쌓이므로 여유를 두고 12건/분으로 건다.
+GEMINI_INTERVAL_SEC = 5.0
 
-# 기본 모델. 무료 티어에서 부를 수 있는 것 중 각 단을 대표하는 것으로 골랐다.
-GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+# 기본 모델. 무료 티어에서 **실제로 불러 본 것** 중 각 단을 대표하는 것으로
+# 골랐다. 목록은 계속 바뀌므로 붙지 않으면 `/models`를 먼저 조회할 것.
+#
+# - gpt-oss-120b: Apache-2.0. 남의 서버로 부르지만 같은 가중치를 사내에
+#   올릴 수 있어 온프렘 단으로 센다.
+# - gemini-3.5-flash: Gemini OpenAI 호환 층은 모델 id에 `models/` 접두사를
+#   요구한다. 빼면 404다.
+# - pro 계열은 무료 티어 할당이 0이라 부를 수 없었다(429). 프론티어 단은
+#   flash로 잡았고, 그 한계는 notes/031에 적었다.
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
+GEMINI_DEFAULT_MODEL = "models/gemini-3.5-flash"
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -74,6 +85,13 @@ def _groq(api_key: str) -> Backend:
             model=model,
             api_key=api_key,
             local=False,
+            # gpt-oss는 사고 모델이다. 끄지 않으면 96토큰을 생각에 다 쓰고
+            # 본문이 빈 채로 온다 — 그대로 채점하면 모든 답이 NONE으로
+            # 기록된다. Groq은 `none`을 받지 않아 `low`가 가장 낮은 값이다.
+            extra_body={"reasoning_effort": "low"},
+            # low로도 96토큰을 다 쓰는 케이스가 14건 중 2건 있었다. 생각한
+            # 토큰도 여기서 깎이므로 답을 담을 자리를 따로 준다.
+            max_tokens=GROQ_MAX_TOKENS,
             min_interval_sec=GROQ_INTERVAL_SEC,
         ),
     )
