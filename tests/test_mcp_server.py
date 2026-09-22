@@ -17,6 +17,8 @@ EXPECTED_TOOLS = {
     "search_clauses",
     "screen_exclusions",
     "adjudicate_claim",
+    "follow_up",
+    "revise_claim",
 }
 
 
@@ -169,3 +171,35 @@ def test_quote_is_flattened_and_capped() -> None:
 
 def test_short_quote_is_left_alone() -> None:
     assert _shorten("비만(E66)") == "비만(E66)"
+
+
+def test_follow_up_tells_the_model_when_not_to_answer_from_memory(tools) -> None:
+    # 후속 질문 도구가 "새 사실이 오면 답하지 말라"를 설명에 담지 않으면,
+    # 모델이 낡은 판정을 근거까지 붙여 설명하게 된다.
+    description = tools["follow_up"].description
+    assert "revise_claim" in description
+    assert "새 사실" in description
+
+
+def test_multi_turn_tools_take_a_session_not_a_claim(tools) -> None:
+    # 청구 내용을 다시 받으면 그건 multi-turn이 아니라 단발 호출 두 번이다.
+    for name in ("follow_up", "revise_claim"):
+        properties = tools[name].input_schema["properties"]
+        assert "session_id" in properties
+        assert "product" not in properties
+        assert "enrolled_on" not in properties
+
+
+def test_revise_keeps_the_negative_means_absent_convention(tools) -> None:
+    # 0은 "올해 아무것도 없다", 음수는 "주지 않았다". 뭉개면 한도를 다 쓴
+    # 계약을 그 해 첫 청구로 보게 된다.
+    properties = tools["revise_claim"].input_schema["properties"]
+    for name in ("paid_this_year", "outpatient_visits_this_year", "self_paid_this_year"):
+        assert properties[name]["default"] == -1
+
+
+def test_missing_session_does_not_pretend(tools) -> None:
+    from clausegraph.mcp_server.server import follow_up, revise_claim
+
+    assert "찾지 못했다" in follow_up("nope", "왜요")
+    assert "찾지 못했다" in revise_claim("nope", paid_this_year=100)

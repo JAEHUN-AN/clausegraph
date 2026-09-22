@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 from datetime import date
 
 from mcp.server.mcpserver import MCPServer
@@ -27,10 +28,12 @@ from neo4j import GraphDatabase
 from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.exclusion import enumerate_exclusions, screen
 from ..agents.extract import extract_claim
+from ..agents.followup import answer
 from ..agents.kcd import matches
-from ..agents.models import Adjudication, ClaimHistory
+from ..agents.models import Adjudication, Claim, ClaimHistory
 from ..agents.orchestrator import adjudicate
 from ..agents.quote import prose_quote
+from ..agents.session import STORE, TurnKind
 from ..agents.terminology import lookup
 from ..graph.schema import OPEN_ENDED
 
@@ -404,7 +407,139 @@ def adjudicate_claim(
         room_charge=max(0, room_charge),
     )
     result = adjudicate(driver(), claim)
-    return _render(result, claim.diagnosis_codes)
+    rendered = _render(result, claim.diagnosis_codes)
+    session = STORE.open(claim, result, rendered)
+    return f"{rendered}\n대화 id {session.session_id} — 후속 질문은 `follow_up`."
+
+
+@mcp.tool()
+def follow_up(session_id: str, question: str) -> str:
+    """앞서 심사한 건에 이어 묻는다. 판정 이유·근거 조항·필요 서류·지급액.
+
+    `adjudicate_claim`이 돌려준 `대화 id`로 호출한다. 청구 내용을 다시
+    넣지 않는다 — 그 대화가 청구와 판정을 들고 있다.
+
+    **답은 저장된 판정 구조에서 나온다.** 앞 턴의 답변 문장을 이어 쓰지
+    않으므로 인용한 조항이 원본에서 떠내려가지 않는다.
+
+    질문에 **판정을 바꾸는 새 사실**(누적 지급액, 다른 진단코드, 입원일수
+    변경 등)이 섞여 있으면 답하지 않고 `revise_claim`으로 보낸다. 낡은
+    판정을 근거까지 붙여 설명하는 것이 이 도구에서 가장 위험한 실패다.
+
+    대화는 30분이 지나면 사라진다. 없으면 `adjudicate_claim`부터 다시 한다.
+    """
+    session = STORE.get(session_id)
+    if session is None:
+        return (
+            f"그 대화를 찾지 못했다 ({session_id}). 30분이 지나 사라졌거나"
+            " 없는 id다. `adjudicate_claim`으로 다시 시작할 것."
+        )
+
+    kind, text = answer(session, question)
+    STORE.save(session.with_turn(TurnKind.FOLLOW_UP, question, text, now=time.monotonic()))
+    return f"[{kind}] {text}"
+
+
+@mcp.tool()
+def revise_claim(
+    session_id: str,
+    paid_this_year: int = -1,
+    outpatient_visits_this_year: int = -1,
+    self_paid_this_year: int = -1,
+    room_charge: int = -1,
+    narrative: str = "",
+) -> str:
+    """새 사실을 넣어 **같은 건을 다시 심사한다.** 앞 판정과의 차이를 낸다.
+
+    `follow_up`이 "판정을 바꾸는 값이 들어 있다"고 돌려보냈을 때 호출한다.
+    청구인이 뒤늦게 말한 누적 지급액, 빠뜨린 진단, 고쳐 말한 입원일수가
+    여기로 들어온다.
+
+    주지 않은 값은 **그대로 둔다.** 음수는 "주지 않았다"는 뜻이고 0은
+    "올해 아무것도 없다"는 뜻이라 서로 다른 말이다. `narrative`를 주면
+    사실추출을 다시 돌려 진단코드·일수·금액을 새로 뽑는다.
+
+    판정은 갈아 끼우지 않고 **판(revision)을 올린다.** 어느 판을 근거로
+    답했는지 되짚을 수 있어야 하기 때문이다.
+    """
+    session = STORE.get(session_id)
+    if session is None:
+        return f"그 대화를 찾지 못했다 ({session_id}). `adjudicate_claim`부터 다시 할 것."
+
+    before = session.adjudication
+    claim = _revise(session.claim, paid_this_year, outpatient_visits_this_year,
+                    self_paid_this_year, room_charge, narrative)
+    result = adjudicate(driver(), claim)
+    rendered = _render(result, claim.diagnosis_codes)
+    STORE.save(
+        session.with_turn(
+            TurnKind.REVISE, narrative or "값 갱신", rendered,
+            now=time.monotonic(), claim=claim, adjudication=result,
+        )
+    )
+    return f"{_diff(before, result)}\n\n{rendered}"
+
+
+def _revise(
+    claim: Claim,
+    paid: int,
+    visits: int,
+    self_paid: int,
+    room_charge: int,
+    narrative: str,
+) -> Claim:
+    """준 값만 갈아 끼운 새 청구. 주지 않은 값은 건드리지 않는다."""
+    totals = (paid, visits, self_paid)
+    history = claim.history
+    if any(value >= 0 for value in totals):
+        base = history or ClaimHistory()
+        history = ClaimHistory(
+            paid_this_year=paid if paid >= 0 else base.paid_this_year,
+            outpatient_visits_this_year=(
+                visits if visits >= 0 else base.outpatient_visits_this_year
+            ),
+            self_paid_this_year=(
+                self_paid if self_paid >= 0 else base.self_paid_this_year
+            ),
+        )
+
+    if not narrative:
+        return claim.model_copy(
+            update={
+                "history": history,
+                "room_charge": room_charge if room_charge >= 0 else claim.room_charge,
+            }
+        )
+
+    # 서술이 새로 오면 사실추출을 다시 돌린다. 앞의 코드에 덧붙이지 않는다 —
+    # 청구인이 고쳐 말한 것이면 옛 값이 남으면 안 된다.
+    return extract_claim(
+        claim.claim_id,
+        claim.product,
+        claim.enrolled_on,
+        narrative,
+        enrich=lookup,
+        history=history,
+        room_charge=room_charge if room_charge >= 0 else claim.room_charge,
+    )
+
+
+def _diff(before: Adjudication, after: Adjudication) -> str:
+    """무엇이 달라졌는가. 안 달라졌으면 안 달라졌다고 말한다."""
+    changes = []
+    if before.decision != after.decision:
+        changes.append(f"판정 {before.decision} -> {after.decision}")
+    if before.amount != after.amount:
+        changes.append(f"지급액 {before.amount:,}원 -> {after.amount:,}원")
+    gone = set(before.guardrails) - set(after.guardrails)
+    added = set(after.guardrails) - set(before.guardrails)
+    if gone:
+        changes.append(f"풀린 가드레일 {', '.join(sorted(gone))}")
+    if added:
+        changes.append(f"걸린 가드레일 {', '.join(sorted(added))}")
+    if not changes:
+        return "다시 심사했고 **달라진 것이 없다.**"
+    return "다시 심사한 결과: " + " / ".join(changes)
 
 
 def _render(result: Adjudication, codes: tuple[str, ...]) -> str:

@@ -19,8 +19,35 @@ from .models import Claim, ClaimHistory
 # KCD-8 코드 표기: 영문 1자 + 숫자 2자 (+ 소수점 세분류)
 _KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
-_AMOUNT_RE = re.compile(r"([\d,]{4,})\s*원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
+
+# 사람은 "3,000,000원"이라고 쓰지 않는다. "300만원"이라고 쓴다.
+#
+# 처음에는 `[\d,]{4,}\s*원` 하나였다. 기계가 적은 금액만 읽는 정규식이라
+# 실제 분쟁 문장 160건에서 **한 번도 발화하지 않았고**, 후속 질문에서는
+# 더 나빴다 — "작년에 300만원 받았는데 왜 부지급이죠"가 새 사실로 잡히지
+# 않아 낡은 판정을 그대로 설명할 뻔했다(notes/033).
+_UNITS = {"억": 100_000_000, "천만": 10_000_000, "백만": 1_000_000, "만": 10_000}
+_AMOUNT_RE = re.compile(r"([\d,]+)\s*(억|천만|백만|만)?\s*원")
+# 이보다 작은 값은 금액으로 세지 않는다 — 조문 번호나 횟수를 금액으로
+# 읽는 것을 막는다.
+MIN_AMOUNT = 1_000
+
+
+def parse_amounts(text: str) -> tuple[int, ...]:
+    """글에 적힌 금액을 전부 원 단위로 읽는다. 나온 순서를 지킨다.
+
+    `삼백만원`처럼 **한글 수사는 읽지 못한다.** 숫자로 적힌 것만 본다.
+    """
+    found: list[int] = []
+    for digits, unit in _AMOUNT_RE.findall(text):
+        cleaned = digits.replace(",", "")
+        if not cleaned:
+            continue
+        value = int(cleaned) * _UNITS.get(unit, 1)
+        if value >= MIN_AMOUNT:
+            found.append(value)
+    return tuple(found)
 
 Enricher = Callable[[str], tuple[str, ...]]
 
@@ -78,8 +105,8 @@ def _hospital_days(text: str) -> int:
 
 
 def _amount(text: str) -> int:
-    match = _AMOUNT_RE.search(text)
-    return int(match.group(1).replace(",", "")) if match else 0
+    amounts = parse_amounts(text)
+    return amounts[0] if amounts else 0
 
 
 def _procedure(text: str) -> str | None:
