@@ -66,6 +66,10 @@ class Paragraph(BaseModel):
     implicit: bool = Field(
         default=False, description="원문에 항 표기가 없어 통째로 1항으로 담았는지"
     )
+    recovered: bool = Field(
+        default=False,
+        description="항 번호가 평문에서 깨져 있어 순서로 되살린 것인지 (notes/036)",
+    )
 
 
 class Article(BaseModel):

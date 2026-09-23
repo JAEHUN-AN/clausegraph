@@ -144,3 +144,52 @@ def test_article_without_revision_marker_has_no_dates() -> None:
     doc = _parse("□ 생명보험\n제1조(목적) 이 계약은 위험을 보장합니다.\n")
 
     assert doc.articles[0].revised_on == ()
+
+
+def test_standalone_revision_marker_is_not_a_product() -> None:
+    # PDF 조판본에서는 `<개정 …>`이 한 줄로 떨어진다. 이걸 상품으로 읽으면
+    # 뒤따르는 조문이 전부 '개정 2014.12.26.' 밑으로 샌다 (notes/036).
+    doc = _parse(
+        "□ 손해보험\n"
+        "<화재보험>\n"
+        "<개정 2014.12.26.>\n"
+        "제4조(보상하지 않는 손해) 회사는 아래의 손해는 보상하지 않습니다.\n"
+    )
+
+    assert doc.articles[0].unit == "화재보험"
+
+
+def test_section_name_stops_at_unclosed_revision_marker() -> None:
+    # 개정 날짜가 길면 표기가 다음 줄로 넘어가 `>`가 그 줄에 없다.
+    doc = _parse(
+        "□ 생명보험 <개정 2005.2.15., 2008.3.26., 2010.1.29. 2011.1.19.,\n"
+        "2013.12.17.>\n"
+        "제1조(목적) 이 계약은 위험을 보장합니다.\n"
+    )
+
+    assert doc.sections == ("생명보험",)
+    assert doc.articles[0].unit == "생명보험"
+
+
+def test_sentence_shaped_reference_does_not_cut_the_article() -> None:
+    # `<부표 4-1>`은 제목으로도 쓰이고 본문에서 가리키는 말로도 쓰인다.
+    doc = _parse(
+        "□ 생명보험\n"
+        "제7조(보험금의 지급절차) ① 회사는 보험금을 지급합니다.\n"
+        "<부표 4-1> ‘보험금을 지급할 때의 적립이율 계산’에 따릅니다.\n"
+        "② 회사는 지급기일까지 보험금을 지급합니다.\n"
+    )
+
+    assert len(doc.articles) == 1
+    assert len(doc.articles[0].paragraphs) == 2
+
+
+def test_heading_shaped_marker_still_cuts_the_article() -> None:
+    doc = _parse(
+        "□ 생명보험\n"
+        "제7조(보험금의 지급절차) ① 회사는 보험금을 지급합니다.\n"
+        "<부표 4> 재해분류표\n"
+        "② 이 줄은 조문 밖이다\n"
+    )
+
+    assert len(doc.articles[0].paragraphs) == 1
