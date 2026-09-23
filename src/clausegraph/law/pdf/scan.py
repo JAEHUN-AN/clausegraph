@@ -101,10 +101,12 @@ def read_page(image, reader) -> list[str]:
     EasyOCR은 상자 단위로 돌려주므로 그대로 이으면 줄이 뒤섞인다. 상자의
     세로 중심으로 줄을 묶고, 같은 줄 안에서는 가로 위치로 정렬한다 —
     레이아웃 파서가 글자층에 하던 일과 같다.
-    """
-    import numpy
 
-    boxes = reader.readtext(numpy.array(image), paragraph=False)
+    `image`는 **엔진이 받는 모양 그대로** 넘긴다. 이미지를 배열로 바꾸는
+    일은 `scan_pages`가 한다 — 여기서 하면 이 함수가 numpy에 묶이는데,
+    묶을 이유가 없다. 이 함수가 하는 일은 상자를 줄로 되돌리는 것뿐이다.
+    """
+    boxes = reader.readtext(image, paragraph=False)
     placed: list[tuple[float, float, str]] = []
     for box, text, _confidence in boxes:
         ys = [point[1] for point in box]
@@ -142,12 +144,13 @@ def scan_pages(
 ) -> list[PageScan]:
     """고른 쪽마다 이미지로 굽고 OCR로 되읽어 원본과 맞댄다."""
     import easyocr
+    import numpy
 
     reader = easyocr.Reader(list(OCR_LANGUAGES), gpu=False, verbose=False)
     results: list[PageScan] = []
     for page_index, truth_lines in sorted(truth_by_page.items()):
         image = render_page(pdf_path, page_index, dpi=dpi)
-        ocr_lines = read_page(image, reader)
+        ocr_lines = read_page(numpy.asarray(image), reader)
         results.append(
             PageScan(
                 page_index=page_index,
