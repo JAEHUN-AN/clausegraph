@@ -63,6 +63,25 @@ class LawClient:
             },
         )
 
+    def search_admbyl(self, admrul_name: str, page: int = 1) -> str:
+        """행정규칙 별표서식 목록.
+
+        `search=2`가 행정규칙명으로 찾는 옵션이다. 기본값(별표서식명)으로
+        행정규칙명을 넣으면 **0건이 온다** — 오류가 아니라 빈 목록이라 조용히
+        지나가기 쉽다.
+        """
+        return self._get(
+            "lawSearch.do",
+            {
+                "target": "admbyl",
+                "type": "XML",
+                "search": "2",
+                "query": admrul_name,
+                "display": str(MAX_DISPLAY),
+                "page": str(page),
+            },
+        )
+
     def fetch_admrul(self, seq: int) -> str:
         """행정규칙 본문 XML. 별표내용까지 포함된다."""
         return self._get("lawService.do", {"target": "admrul", "type": "XML", "ID": str(seq)})

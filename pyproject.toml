@@ -37,6 +37,14 @@ serve = [
     "mcp>=1.1",
     "prometheus-client>=0.21",
 ]
+pdf = [
+    "pdfplumber>=0.11",
+]
+# 스캔본 손실 측정 전용. torch(CPU)를 끌고 오므로 기본 묶음에 넣지 않는다.
+ocr = [
+    "easyocr>=1.7",
+    "pypdfium2>=4.30",
+]
 dev = ["pytest>=8.3", "pytest-cov>=5.0", "ruff>=0.6", "responses>=0.25"]
 mcp = [
     "mcp>=1.1",

@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from .models import Article, TableExclusion
 from .table_parser import Lexicon, find_table_blocks, parse_table
-
-_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+from .terms_parser import CIRCLED_CHARS, circled_number
 
 # 흐름 속 번호 표기 후보. 앞이 숫자나 마침표면 날짜·조문 인용이다.
 _ITEM_CANDIDATE_RE = re.compile(r"(?<![\d.])(\d{1,2})\.\s")
@@ -27,25 +27,35 @@ MIN_ITEM_TEXT = 4
 
 def parse_exclusion_table(article: Article, lexicon: Lexicon) -> tuple[TableExclusion, ...]:
     """면책 조문의 표에서 보장종목별 사유를 뽑는다."""
-    exclusions: list[TableExclusion] = []
+    rows: list[tuple[str, ...]] = []
     for block in find_table_blocks(article.text):
-        rows = parse_table(block, lexicon)
-        for row in rows:
-            if len(row.cells) < 2 or _is_header(row.cells):
-                continue
-            # 표는 2열(보장종목/사항)일 때도 3열(보장종목/세부구성항목/사항)일
-            # 때도 있다. 내용은 늘 마지막 열이고, 앞의 열들이 합쳐서 보장종목이다.
-            coverage = _coverage_label(row.cells[:-1])
-            for paragraph_no, chunk in _split_paragraphs(row.cells[-1]):
-                for number, text in _split_items(chunk):
-                    exclusions.append(
-                        TableExclusion(
-                            coverage=coverage,
-                            paragraph=paragraph_no,
-                            number=number,
-                            text=text,
-                        )
+        rows.extend(row.cells for row in parse_table(block, lexicon))
+    return exclusions_from_rows(rows)
+
+
+def exclusions_from_rows(rows: Iterable[tuple[str, ...]]) -> tuple[TableExclusion, ...]:
+    """셀로 풀린 행에서 면책 사유를 읽는다.
+
+    셀을 어떻게 얻었는지는 묻지 않는다. 평문의 괘선에서 풀든 PDF의 사각형에서
+    풀든, **읽는 규칙은 한 벌이어야** 두 경로를 맞대 볼 수 있다 (notes/036).
+    """
+    exclusions: list[TableExclusion] = []
+    for cells in rows:
+        if len(cells) < 2 or _is_header(cells):
+            continue
+        # 표는 2열(보장종목/사항)일 때도 3열(보장종목/세부구성항목/사항)일
+        # 때도 있다. 내용은 늘 마지막 열이고, 앞의 열들이 합쳐서 보장종목이다.
+        coverage = _coverage_label(cells[:-1])
+        for paragraph_no, chunk in _split_paragraphs(cells[-1]):
+            for number, text in _split_items(chunk):
+                exclusions.append(
+                    TableExclusion(
+                        coverage=coverage,
+                        paragraph=paragraph_no,
+                        number=number,
+                        text=text,
                     )
+                )
     return tuple(exclusions)
 
 
@@ -70,14 +80,14 @@ def _is_header(cells: tuple[str, ...]) -> bool:
 
 def _split_paragraphs(text: str) -> list[tuple[int, str]]:
     """① ② … 로 나눈다. 표기가 없으면 통째로 1항."""
-    positions = [(index, char) for index, char in enumerate(text) if char in _CIRCLED]
+    positions = [(index, char) for index, char in enumerate(text) if char in CIRCLED_CHARS]
     if not positions:
         return [(1, text)]
 
     chunks: list[tuple[int, str]] = []
     for order, (start, char) in enumerate(positions):
         end = positions[order + 1][0] if order + 1 < len(positions) else len(text)
-        chunks.append((_CIRCLED.index(char) + 1, text[start + 1 : end].strip()))
+        chunks.append((circled_number(char), text[start + 1 : end].strip()))
     return chunks
 
 

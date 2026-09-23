@@ -25,8 +25,26 @@ import re
 
 from .models import Article, Item, Paragraph, Subitem, TermsDocument
 
-_SECTION_RE = re.compile(r"^\s*□\s*(.+?)\s*(?:<개정[^>]*>|<신설[^>]*>)?\s*$")
-_SUBSECTION_RE = re.compile(r"^\s*<([가-힣][^>]{0,30})>\s*(?:<개정[^>]*>)?\s*$")
+# 상품 이름은 첫 `<` 앞까지다. 뒤에 붙는 개정 표기는 이름이 아니다.
+#
+# 예전에는 `<개정 …>` 한 짝이 그 줄에서 닫힌다고 보고 잘랐는데, PDF
+# 조판본에서는 개정 날짜가 길어 **표기가 다음 줄로 넘어간다.** 그러면 짝이
+# 닫히지 않아 통째로 이름에 남고, '생명보험 <개정 2005.2.15., …'가 상품이
+# 된다 (notes/036). 닫히든 말든 첫 `<`에서 끊으면 두 경우가 같아진다.
+_SECTION_RE = re.compile(r"^\s*□\s*([^<]+?)\s*(?:<.*)?$")
+# 개정·신설 표기는 상품 구분이 아니다. XML 평문에서는 이 표기가 언제나
+# 앞 문장 뒤에 붙어 나와서 걸린 적이 없었는데, 같은 문서의 PDF 조판본에서는
+# 줄이 접히면서 `<개정 2014.12.26.>` 한 줄이 통째로 남는다. 그러면 '개정
+# 2014.12.26.'이 상품 이름이 되고, 뒤따르는 조문이 전부 그 밑으로 샌다
+# (notes/036 — PDF 대조에서 드러났다).
+#
+# 뒤에 붙는 표기는 `□`와 같은 이유로 닫히지 않아도 받는다 — `<화재보험>
+# <개정 2005.2.15., …,`처럼 개정 날짜가 다음 줄로 넘어간다. 다만 `<`로
+# 시작하지 않는 꼬리는 받지 않는다. `<별표 1> 대인배상 지급 기준`은 상품
+# 구분이 아니라 표 제목이다.
+_SUBSECTION_RE = re.compile(
+    r"^\s*<(?!개\s*정|신\s*설|단서\s*신설)([가-힣][^>]{0,30})>\s*(?:<.*)?$"
+)
 _CHAPTER_RE = re.compile(r"^\s*(제\s?\d+\s?[관절]\s+.+?)\s*$")
 # 조문 머리글의 **번호 부분만** 정규식으로 잡는다. 제목은 괄호 깊이를 세어
 # 따로 끊는다 — 이유는 `match_article` 참고.
@@ -35,7 +53,30 @@ _ARTICLE_HEAD_RE = re.compile(r"^\s*제\s?(\d+)\s?조(?:의\s?(\d+))?\s*(?=[(\[]
 # 제목을 묶는 괄호. 표준약관은 두 짝을 섞어 쓴다.
 _TITLE_BRACKETS = {"(": ")", "[": "]"}
 
-_PARAGRAPH_RE = re.compile(r"^\s*([①-⑳])\s*(.*)$")
+# 항 번호에 쓰이는 글자가 한 벌이 아니다. 조판본에는 `➄`(U+2784) 계열이
+# 섞여 있는데 `⑤`(U+2464)와 **다른 글자**다. 한쪽만 보면 그 항을 못 읽는다.
+CIRCLED_PRIMARY = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+CIRCLED_DINGBAT = "➀➁➂➃➄➅➆➇➈➉"
+CIRCLED_CHARS = CIRCLED_PRIMARY + CIRCLED_DINGBAT
+
+
+def circled_number(char: str) -> int:
+    """원 숫자 글자를 번호로. 두 벌 중 어느 쪽이든 받는다."""
+    if char in CIRCLED_PRIMARY:
+        return CIRCLED_PRIMARY.index(char) + 1
+    return CIRCLED_DINGBAT.index(char) + 1
+
+
+_PARAGRAPH_RE = re.compile(rf"^\s*([{CIRCLED_CHARS}])\s*(.*)$")
+
+# 항 번호가 통째로 깨져 물음표만 남은 줄.
+#
+#   XML  `? 회사가 제2항에 따라 일부보장 제외조건을 …`
+#   PDF  `➄ 회사가 제2항에 따라 일부보장 제외조건을 …`
+#
+# 별표내용을 평문으로 옮기는 과정에서 원 숫자 계열 글자가 사라진다.
+# 이 줄을 항으로 읽지 않으면 **그 항이 통째로 앞 항에 붙는다** (notes/036).
+_LOST_PARAGRAPH_RE = re.compile(r"^\s*\?\s+(\S.*)$")
 _ITEM_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 _SUBITEM_RE = re.compile(r"^\s*([가-힣])\.\s+(.*)$")
 
@@ -50,7 +91,14 @@ _DATE_RE = re.compile(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})")
 # **상품 문맥은 그대로 둔다**.
 _NON_PRODUCT_RE = re.compile(r"^\s*<\s*(?:부표|붙\s*임|별표|목\s*차|예\s*시)")
 
-_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+# 같은 표기가 제목으로도 쓰이고 본문에서 가리키는 말로도 쓰인다.
+#
+#   제목  `<부표 4> 재해분류표`
+#   본문  `<부표 4-1> ‘보험금을 지급할 때의 적립이율 계산’에 따릅니다.`
+#
+# 본문 쪽을 제목으로 읽으면 **진행 중인 조문이 거기서 끊긴다.** 법령문의
+# 문장은 `…다.`로 끝나므로, 문장으로 끝나는 줄은 제목이 아니라고 본다.
+_SENTENCE_TAIL_RE = re.compile(r"다\.\s*$")
 
 # 표 안의 줄은 조문 구조로 읽으면 안 된다.
 _TABLE_CHARS = frozenset("┌┐└┘├┤┬┴┼─│")
@@ -138,7 +186,7 @@ def parse_terms(text: str, effective_on: str, admrul_seq: int) -> TermsDocument:
             sections.append(section)
             continue
 
-        if _NON_PRODUCT_RE.match(line):
+        if _NON_PRODUCT_RE.match(line) and not _SENTENCE_TAIL_RE.search(line):
             flush()
             header, buffer = None, []
             continue
@@ -209,12 +257,24 @@ def _build_article(
 
 def _parse_paragraphs(body: str) -> tuple[Paragraph, ...]:
     """항 표기로 나눈다. 표기가 없으면 통째로 1항 하나로 담는다."""
-    blocks: list[tuple[int, list[str]]] = []
+    blocks: list[tuple[int, list[str], bool]] = []
     for line in body.split("\n"):
-        match = None if _is_table_line(line) else _PARAGRAPH_RE.match(line)
-        if match:
-            blocks.append((_CIRCLED.index(match.group(1)) + 1, [match.group(2)]))
-        elif blocks:
+        if _is_table_line(line):
+            if blocks:
+                blocks[-1][1].append(line)
+            continue
+
+        if match := _PARAGRAPH_RE.match(line):
+            blocks.append((circled_number(match.group(1)), [match.group(2)], False))
+            continue
+
+        # 항 번호가 물음표로 깨져 있으면 **순서로** 되살린다. 원천이 잃은
+        # 글자를 다른 문서에서 가져오지 않는다 — ④ 다음의 깨진 자리는 ⑤다.
+        if (lost := _LOST_PARAGRAPH_RE.match(line)) and blocks:
+            blocks.append((blocks[-1][0] + 1, [lost.group(1)], True))
+            continue
+
+        if blocks:
             blocks[-1][1].append(line)
 
     if not blocks:
@@ -228,8 +288,9 @@ def _parse_paragraphs(body: str) -> tuple[Paragraph, ...]:
             number=number,
             text="\n".join(lines).strip(),
             items=_parse_items("\n".join(lines)),
+            recovered=recovered,
         )
-        for number, lines in blocks
+        for number, lines, recovered in blocks
     ]
     # 항 앞에 붙은 도입 문장은 버리지 않는다.
     if leading.strip() and not _PARAGRAPH_RE.match(leading):
