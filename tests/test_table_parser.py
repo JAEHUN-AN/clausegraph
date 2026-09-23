@@ -132,3 +132,23 @@ def test_paragraph_markers_split_the_cell() -> None:
 
 def test_cell_without_paragraph_marker_is_one_paragraph() -> None:
     assert [number for number, _ in _split_paragraphs("1. 고의로 해친 경우")] == [1]
+
+
+def test_thin_row_separator_splits_rows_too() -> None:
+    # `┠╂┨`는 `┣╋┫`와 굵기만 다른 같은 구분선이다. 안 끊으면 서로 다른
+    # 보장의 사유가 한 행으로 합쳐진다 (notes/036).
+    block = [
+        "┏━━━━┳━━━━┳━━━━━━━━━━┓",
+        "┃보장종목┃세부구성┃보상하지 않는 사항      ┃",
+        "┣━━━━╋━━━━╋━━━━━━━━━━┫",
+        "┃(1)상해┃해외    ┃① 해외에서 생긴 비용   ┃",
+        "┃        ┠────╂──────────┨",
+        "┃        ┃국내    ┃① 국내에서 생긴 비용   ┃",
+        "┗━━━━┻━━━━┻━━━━━━━━━━┛",
+    ]
+
+    rows = parse_table(block, Lexicon(""))
+
+    bodies = [row.cells[-1] for row in rows]
+    assert "① 해외에서 생긴 비용" in bodies
+    assert "① 국내에서 생긴 비용" in bodies
