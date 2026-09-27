@@ -287,8 +287,19 @@ def stem(token: str) -> str:
     return token
 
 
+def stemmed_tokens(text: str) -> list[str]:
+    """어간 토큰을 **나온 순서대로, 중복을 남긴 채** 돌려준다.
+
+    `_tokens`는 집합이라 빈도를 잃는다. 어휘 색인(`rag/lexical.py`)은 같은
+    낱말이 몇 번 나왔는지가 점수에 들어가므로 이쪽을 쓴다. 토큰 규칙을
+    두 벌 만들지 않으려고 여기 둔다 — 색인과 심사가 어긋나면 notes/023이
+    그대로 재현된다.
+    """
+    return [stem(token) for token in _TOKEN_RE.findall(text)]
+
+
 def _tokens(text: str) -> set[str]:
-    return {stem(token) for token in _TOKEN_RE.findall(text)}
+    return set(stemmed_tokens(text))
 
 
 def matchable(clause: str) -> str:

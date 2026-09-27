@@ -23,3 +23,17 @@ CREATE TABLE IF NOT EXISTS clause_chunk (
 CREATE INDEX IF NOT EXISTS clause_chunk_product ON clause_chunk (product);
 CREATE INDEX IF NOT EXISTS clause_chunk_version ON clause_chunk (effective_from);
 CREATE INDEX IF NOT EXISTS clause_chunk_exclusion ON clause_chunk (is_exclusion);
+
+-- 어휘 검색용 어간 색인 (notes/038).
+--
+-- `content`를 그대로 to_tsvector에 넣지 않는다. Postgres에 한국어 형태소
+-- 규칙이 없어 'simple' 설정은 어절을 통째로 넣는데, 그러면 '대상'과
+-- '대상에'가 다른 말이 된다 — notes/025에서 이미 값을 치른 실패다.
+-- 그래서 색인 전에 파이썬 쪽(agents/exclusion.stem)에서 조사를 떼고,
+-- 여기에는 어간만 공백으로 이어 붙인 문자열이 들어온다.
+--
+-- 생성 컬럼(GENERATED)으로 두지 않는 이유가 그것이다. 어간 규칙이 DB 밖에
+-- 있으므로 DB가 스스로 만들 수 없다.
+ALTER TABLE clause_chunk ADD COLUMN IF NOT EXISTS lexeme tsvector;
+
+CREATE INDEX IF NOT EXISTS clause_chunk_lexeme ON clause_chunk USING GIN (lexeme);

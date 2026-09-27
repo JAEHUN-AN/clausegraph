@@ -126,3 +126,23 @@ uv run --extra rag --extra onnx python -m clausegraph.rag.index_cli
 uv run --extra rag python -m clausegraph.rag.build_evalset
 uv run --extra rag --extra onnx --extra graph python -m clausegraph.rag.evaluate --k 10
 ```
+
+## 나중에 붙임 (notes/038)
+
+이 노트는 결론을 이렇게 적었다.
+
+> 면책 조회는 랭킹 문제가 아니라 열거 문제다.
+
+[notes/038](038-hybrid-rerank.md)에서 어휘 검색과 교차 인코더 리랭킹을
+붙여 다시 쟀고, **이 문장이 과했다는 것이 나왔다.** 같은 벡터 후보 100개를
+순서만 바꿔 recall이 32.9% → 55.1%가 된다 — 랭킹 문제인 부분이 실제로 있다.
+
+결론은 바뀌지 않는다(그래프를 쓴다). 근거만 좁혀 적는다.
+
+> **면책 조회에서 랭킹은 열거를 대체하지 못한다.** 랭킹을 잘하면 벡터
+> 경로가 55.1%까지 오르지만 열거의 100%에는 닿지 못하고, 열거된 결과에
+> 랭킹을 걸면 오히려 40.7%p를 잃는다.
+
+이 노트의 `hybrid`는 **벡터+그래프**다. notes/038부터 `vec+graph`로 부른다 —
+업계에서 하이브리드는 어휘+벡터를 뜻하므로 같은 낱말을 두 뜻으로 쓰지
+않으려는 것이고, 위 표의 값은 그대로다.

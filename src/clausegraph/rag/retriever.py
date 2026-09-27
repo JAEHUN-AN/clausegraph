@@ -14,13 +14,19 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import psycopg
 from neo4j import Driver
-from pgvector.psycopg import register_vector
 
 from ..graph.schema import OPEN_ENDED
-from .embed import Embedder
+
+# 드라이버와 임베더는 **타입으로만** 쓴다. 최상단에서 들이면 `rag`·`onnx`
+# extra 없이는 이 파일을 import조차 못 하는데, 순위 융합이나 `Hit`처럼
+# 순수한 것들은 둘 다 필요 없다. CI는 그 extra를 설치하지 않는다.
+if TYPE_CHECKING:  # pragma: no cover
+    import psycopg
+
+    from .embed import Embedder
 
 DEFAULT_K = 10
 
@@ -61,6 +67,16 @@ class Hit:
 
 
 def connect_pg() -> psycopg.Connection:
+    """pgvector 연결.
+
+    `psycopg`와 `pgvector`를 **여기서** 들인다. 모듈 최상단에서 들이면
+    `rag` extra 없이는 이 파일을 import조차 못 하는데, 순위 융합이나
+    `Hit` 같은 순수한 것들은 드라이버가 필요 없다. CI는 `rag` extra를
+    설치하지 않으므로(torch 2GB) 그쪽에서 단위 테스트가 통째로 깨졌다.
+    """
+    import psycopg
+    from pgvector.psycopg import register_vector
+
     connection = psycopg.connect(os.environ["PG_DSN"])
     register_vector(connection)
     return connection
@@ -141,3 +157,33 @@ def search_hybrid(
     for hit in search_graph(driver, products, on_date=on_date):
         merged.setdefault(hit.node_uid, hit)
     return list(merged.values())
+
+
+# 순위 융합 상수. 원 논문(Cormack 2009)의 값이고, 이 규모에서 손댈 근거가 없다.
+RRF_K = 60
+
+
+def fuse_rrf(rankings: list[list[Hit]], *, limit: int | None = None) -> list[Hit]:
+    """여러 순위를 RRF로 섞는다.
+
+    **점수를 섞지 않고 순위만 섞는다.** 코사인 유사도는 0~1이고
+    `ts_rank_cd`는 상한이 없다. 둘을 정규화해 가중합하려면 가중치를 어디선가
+    정해야 하는데, 그 값을 정할 근거가 이 프로젝트에 없다 — 18문항으로
+    맞추면 그 18문항에 맞춘 값이 된다.
+
+    RRF는 각 순위에서 `1/(RRF_K + 순위)`를 더한다. 점수 공식이 달라도
+    되고, 튜닝할 손잡이가 사실상 없다. 그래서 **측정이 정직해진다** —
+    "섞었더니 좋아졌다"가 가중치를 만진 결과가 아니라는 것이 분명하다.
+    """
+    scores: dict[str, float] = {}
+    best: dict[str, Hit] = {}
+    for ranking in rankings:
+        for rank, hit in enumerate(ranking, start=1):
+            scores[hit.node_uid] = scores.get(hit.node_uid, 0.0) + 1.0 / (RRF_K + rank)
+            # 같은 청크가 두 순위에 있으면 먼저 본 쪽을 남긴다. 내용은 같고
+            # `source`만 다르다.
+            best.setdefault(hit.node_uid, hit)
+    ordered = sorted(scores, key=lambda uid: scores[uid], reverse=True)
+    if limit is not None:
+        ordered = ordered[:limit]
+    return [best[uid] for uid in ordered]
