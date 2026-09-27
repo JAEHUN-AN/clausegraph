@@ -152,14 +152,36 @@ def _strategies(connection, driver, embedder, k: int, with_rerank: bool):
     return tuple(strategies)
 
 
-def evaluate(eval_path: Path, k: int, with_rerank: bool = False) -> int:
+# 회귀 게이트가 부르는 이름. 보고서가 아니라 **수만** 돌려준다
+# (notes/041). 게이트가 출력을 파싱하게 두면 표 모양을 바꿀 때마다
+# 게이트가 조용히 깨진다.
+_BASELINE_KEYS = {
+    "vector": "vector_recall",
+    "graph": "graph_recall",
+    "vec+graph": "vec_graph_recall",
+    "lexical": "lexical_recall",
+}
+
+
+def measure_strategies(eval_path: Path, k: int = DEFAULT_K) -> dict[str, float]:
+    """전략별 recall만. 리랭킹은 빼고 잰다 — CPU로 77분이 걸린다."""
+    results, _, _, _ = _collect(eval_path, k, with_rerank=False)
+    scores: dict[str, float] = {}
+    for name, key in _BASELINE_KEYS.items():
+        data = results.get(name)
+        if data:
+            scores[key] = sum(data["recall"]) / len(data["recall"])
+    return scores
+
+
+def _collect(eval_path: Path, k: int, with_rerank: bool):
+    """측정만 한다. 보고는 부르는 쪽이 한다."""
     questions = json.loads(eval_path.read_text(encoding="utf-8"))["questions"]
     embedder = get_embedder()
     driver = GraphDatabase.driver(
         os.environ["NEO4J_URI"],
         auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"]),
     )
-
     try:
         with connect_pg() as connection:
             strategies = _strategies(connection, driver, embedder, k, with_rerank)
@@ -173,23 +195,24 @@ def evaluate(eval_path: Path, k: int, with_rerank: bool = False) -> int:
             for question in questions:
                 gold = set(question["gold"])
                 row: dict[str, object] = {"qid": question["qid"], "gold": len(gold)}
-
                 for name, run in strategies:
                     started = time.perf_counter()
                     hits = run(question)
                     elapsed = time.perf_counter() - started
-
                     found = {hit.node_uid for hit in hits} & gold
                     results[name]["hit"].append(1 if found else 0)
                     results[name]["recall"].append(len(found) / len(gold))
                     results[name]["candidates"].append(len(hits))
                     results[name]["latency"].append(elapsed)
                     row[name] = f"{len(found)}/{len(gold)}"
-
                 per_question.append(row)
     finally:
         driver.close()
+    return results, per_question, questions, names
 
+
+def evaluate(eval_path: Path, k: int, with_rerank: bool = False) -> int:
+    results, per_question, questions, names = _collect(eval_path, k, with_rerank)
     _report(results, per_question, questions, k, names)
     return 0
 

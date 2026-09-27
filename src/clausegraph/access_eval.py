@@ -84,7 +84,24 @@ def _count(rows, product_of, scope: frozenset[str]) -> tuple[int, frozenset[str]
     return len(outside), frozenset(outside)
 
 
+def measure_totals(eval_path: Path) -> dict[str, float]:
+    """회귀 게이트용. 게이트 후 누수 총합만 돌려준다(notes/041).
+
+    **게이트 전 값은 기준선에 넣지 않는다.** 그 수는 "게이트가 없었다면
+    얼마나 샜을까"이고 말뭉치가 커지면 자연히 는다. 지켜야 하는 것은
+    게이트 **후**가 0이라는 것뿐이다.
+    """
+    leaks = _measure(eval_path)
+    return {"leaks_after_gate": float(sum(leak.after for leak in leaks.values()))}
+
+
 def measure(eval_path: Path) -> int:
+    leaks = _measure(eval_path)
+    _report(leaks, len(json.loads(eval_path.read_text(encoding="utf-8"))["questions"]))
+    return 0
+
+
+def _measure(eval_path: Path) -> dict[str, Leak]:
     questions = json.loads(eval_path.read_text(encoding="utf-8"))["questions"]
     embedder = get_embedder()
     driver = GraphDatabase.driver(
@@ -159,8 +176,7 @@ def measure(eval_path: Path) -> int:
     finally:
         driver.close()
 
-    _report(leaks, len(questions))
-    return 0
+    return leaks
 
 
 def _report(leaks: dict[str, Leak], questions: int) -> None:

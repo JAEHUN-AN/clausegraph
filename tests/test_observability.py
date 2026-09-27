@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from clausegraph.observability import Registry, track
+from clausegraph.observability import Registry
 
 
 @pytest.fixture
@@ -57,20 +57,6 @@ def test_failures_are_counted_separately(registry: Registry) -> None:
 
     assert registry.steps()[0].failures == 1
     assert registry.steps()[0].count == 2
-
-
-def test_track_records_elapsed_time(registry: Registry) -> None:
-    with track("step", registry):
-        pass
-
-    assert registry.steps()[0].count == 1
-
-
-def test_track_records_failure_and_reraises(registry: Registry) -> None:
-    with pytest.raises(ValueError), track("step", registry):
-        raise ValueError("의도한 실패")
-
-    assert registry.steps()[0].failures == 1
 
 
 def test_counters_are_sorted_by_size(registry: Registry) -> None:

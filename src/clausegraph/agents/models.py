@@ -122,6 +122,13 @@ class Adjudication(BaseModel):
     guardrails: tuple[str, ...] = Field(
         default=(), description="발동한 가드레일 이름"
     )
+    trace_id: str = Field(
+        default="",
+        description=(
+            "이 판정의 실행 기록 id. 심사자가 '왜 이렇게 나왔나'를 물으면"
+            " 이 값으로 스텝 단위까지 되짚는다(notes/041)"
+        ),
+    )
 
     @property
     def total_ms(self) -> float:
