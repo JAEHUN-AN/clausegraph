@@ -733,7 +733,7 @@ def _version_for_product(parsed: date, enrolled_on: str, product: str) -> str:
     # **판본이 정해져도 그 안의 조문 몇 개는 아직 옛 내용일 수 있다.**
     # 부칙이 조문 단위로 시행일을 따로 정하는 경우가 있고, 조문 단위 버전이
     # 없는 지금 구조로는 그 조문만 되돌릴 수 없다(notes/030).
-    scoped = article_scoped_notes(driver(), version, product)
+    scoped = article_scoped_notes(driver(), version, product, principal=principal())
     if scoped:
         lines.append(
             "주의: 이 판본에는 **조문 일부만** 시행일을 따로 정한 부칙이 있다. "

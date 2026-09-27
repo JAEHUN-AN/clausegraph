@@ -144,3 +144,48 @@ def test_every_mcp_tool_is_guarded() -> None:
 
     assert source.count("@mcp.tool()") == source.count("@guarded")
     assert "@mcp.tool()\n@guarded\n" in source
+
+
+def test_every_call_site_passes_a_principal() -> None:
+    """게이트된 함수를 부르는 **모든 자리**가 principal을 넘겨야 한다.
+
+    시그니처 검사(`test_every_data_path_requires_a_principal`)는 정의만
+    본다. 정의를 고쳐도 호출부를 빠뜨릴 수 있고, 실제로 빠뜨렸다 —
+    `rag/evaluate.py`가 그랬다. 키워드 필수로 만든 덕에 조용히 새는 대신
+    `TypeError`로 터졌지만, **그 파일은 단위 테스트가 없어서 게이트를
+    돌리기 전까지 아무도 몰랐다**(notes/041).
+
+    호출부는 시그니처로 못 잡으므로 소스를 읽어 센다.
+    """
+    import ast
+    from pathlib import Path
+
+    gated = {
+        "find_coverage", "article_scoped_notes", "enumerate_exclusions",
+        "screen", "adjudicate", "search_vector", "search_graph",
+        "search_hybrid", "search_lexical",
+    }
+    # 정의하는 쪽과, 주체를 만들어 내려보내는 진입점은 뺀다.
+    offenders: list[str] = []
+
+    for path in sorted(Path("src/clausegraph").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name)
+                else None
+            )
+            if name not in gated:
+                continue
+            if any(keyword.arg == "principal" for keyword in node.keywords):
+                continue
+            # `**kwargs` 전달은 통과시킨다 — 감싸는 함수다.
+            if any(keyword.arg is None for keyword in node.keywords):
+                continue
+            offenders.append(f"{path.as_posix()}:{node.lineno} {name}")
+
+    assert not offenders, "principal 없이 부르는 자리:\n  " + "\n  ".join(offenders)
