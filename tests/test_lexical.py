@@ -106,34 +106,48 @@ def test_rrf_ignores_score_scale() -> None:
     ]
 
 
-def test_pure_modules_do_not_need_the_database_driver_at_import() -> None:
-    """`psycopg`·`pgvector`를 모듈 최상단에서 들이지 않아야 한다.
+def test_pure_modules_import_without_the_heavy_extras() -> None:
+    """`rag`·`onnx` extra 없이도 순수 모듈을 import할 수 있어야 한다.
 
-    CI는 `rag` extra를 설치하지 않는다(torch가 2GB라 넣을 값어치가 없다).
-    그런데 순위 융합·`Hit`·어간 토큰화는 드라이버가 필요 없는 순수한
-    것들이다. 최상단에서 들이면 그 순수한 것들의 단위 테스트가 **통째로**
-    깨진다 — 실제로 깨뜨렸고 CI에서야 봤다.
+    CI는 그 extra를 설치하지 않는다 — torch가 2GB이고, 순위 융합·`Hit`·
+    어간 토큰화는 드라이버도 임베더도 필요 없다. 그런데 최상단에서 들이면
+    그 순수한 것들의 단위 테스트가 **수집 단계에서 통째로** 깨진다.
 
-    로컬에서는 extra가 깔려 있어 import가 성공하므로 이 실패가 안 보인다.
-    그래서 소스를 읽어 막는다.
+    **로컬에서는 extra가 깔려 있어 이 실패가 안 보인다.** 실제로 두 번
+    깨뜨렸고 두 번 다 CI에서야 봤다 — `psycopg` 한 번, 한 겹 아래
+    `embed -> numpy` 한 번. 최상단 import만 훑는 검사로는 두 번째를 못
+    잡았다(전이 의존이라서).
+
+    그래서 무거운 모듈을 **막은 채로 실제 import를 해 본다.** 하위
+    프로세스에서 돌리는 이유는 이 프로세스에는 이미 들어와 있기 때문이다.
     """
-    import ast
-    from pathlib import Path
+    import subprocess
+    import sys
+    import textwrap
 
-    heavy = {"psycopg", "pgvector"}
-    offenders: list[str] = []
+    blocked = ("numpy", "psycopg", "pgvector", "torch", "transformers", "onnxruntime")
+    program = textwrap.dedent(f"""
+        import sys
 
-    for name in ("retriever.py", "lexical.py"):
-        path = Path("src/clausegraph/rag") / name
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in tree.body:  # 최상단만 본다. 함수 안은 괜찮다.
-            if isinstance(node, ast.Import):
-                names = {alias.name.split(".")[0] for alias in node.names}
-            elif isinstance(node, ast.ImportFrom):
-                names = {(node.module or "").split(".")[0]}
-            else:
-                continue
-            if names & heavy:
-                offenders.append(f"{path.as_posix()}:{node.lineno}")
+        class Blocker:
+            def find_module(self, name, path=None):
+                return self if name.split(".")[0] in {blocked!r} else None
 
-    assert not offenders, "최상단에서 드라이버를 들인다: " + ", ".join(offenders)
+            def find_spec(self, name, path=None, target=None):
+                if name.split(".")[0] in {blocked!r}:
+                    raise ImportError(f"{{name}} is blocked for this test")
+                return None
+
+        sys.meta_path.insert(0, Blocker())
+        import clausegraph.rag.retriever
+        import clausegraph.rag.lexical
+        print("ok")
+    """)
+
+    result = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, (
+        "무거운 extra 없이 import가 안 된다: " + result.stderr[-2000:]
+    )
