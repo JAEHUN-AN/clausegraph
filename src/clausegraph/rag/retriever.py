@@ -18,12 +18,16 @@ from typing import TYPE_CHECKING
 
 from neo4j import Driver
 
+from ..access import Principal, visible
+from ..graph.schema import OPEN_ENDED
+
+# 드라이버와 임베더는 **타입으로만** 쓴다. 최상단에서 들이면 `rag`·`onnx`
+# extra 없이는 이 파일을 import조차 못 하는데, 순위 융합이나 `Hit`처럼
+# 순수한 것들은 둘 다 필요 없다. CI는 그 extra를 설치하지 않는다.
 if TYPE_CHECKING:  # pragma: no cover
     import psycopg
 
-from ..access import Principal, visible
-from ..graph.schema import OPEN_ENDED
-from .embed import Embedder
+    from .embed import Embedder
 
 DEFAULT_K = 10
 
