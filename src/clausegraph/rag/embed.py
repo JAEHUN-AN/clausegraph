@@ -23,10 +23,12 @@ EMBED_DIM = 1024
 MAX_SEQ_TOKENS = 1024
 BATCH_SIZE = 16
 
-# kograph에서 만든 양자화 모델을 그대로 쓴다 (2.2GB 재다운로드 회피).
-DEFAULT_ONNX_DIR = Path(
-    os.getenv("CLAUSEGRAPH_ONNX_DIR", r"C:\workspace\kograph\models\bge-m3-onnx")
-)
+# 양자화 모델의 위치. 리포에 담지 않으므로(2.2GB) 밖에서 가리킨다.
+#
+# 예전에는 기본값이 내 기계의 절대 경로였다. 나만 돌릴 수 있는 기본값이라
+# 리포를 받은 사람에게는 쓸모가 없고, 경로에 내 작업 폴더 구조가 그대로
+# 드러난다. 기본값을 리포 안으로 옮기고 다른 위치는 환경변수로 가리킨다.
+DEFAULT_ONNX_DIR = Path(os.getenv("CLAUSEGRAPH_ONNX_DIR", "models/bge-m3-onnx"))
 ONNX_INT8_FILE = "onnx/model_qint8_avx512_vnni.onnx"
 
 # torch | onnx-int8
