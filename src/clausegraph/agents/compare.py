@@ -88,7 +88,24 @@ def _source_lines(path: Path) -> int:
     return count
 
 
+def measure_agreement(count: int = 60) -> dict[str, float]:
+    """회귀 게이트용. 판정 일치율만 돌려준다(notes/041).
+
+    지연은 기준선에 넣지 않는다 — 같은 기계에서 재도 0.3ms 대에서는
+    다른 프로세스 하나에 두 배가 흔들린다. **재현되지 않는 수를 게이트에
+    걸면 게이트를 끄게 된다.**
+    """
+    measured, _, _, mismatches = _run(count)
+    return {"agreement": (measured - len(mismatches)) / max(measured, 1)}
+
+
 def run(count: int) -> int:
+    measured, self_ms, graph_ms, mismatches = _run(count)
+    _report(measured, self_ms, graph_ms, mismatches)
+    return 0
+
+
+def _run(count: int):
     rng = random.Random(SEED)
     claims = synthesize(count, rng)
     driver = GraphDatabase.driver(
@@ -134,8 +151,7 @@ def run(count: int) -> int:
     finally:
         driver.close()
 
-    _report(measured, self_ms, graph_ms, mismatches)
-    return 0
+    return measured, self_ms, graph_ms, mismatches
 
 
 def _report(measured, self_ms, graph_ms, mismatches) -> None:

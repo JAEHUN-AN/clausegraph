@@ -8,14 +8,15 @@
 
 지표는 프로세스 안에 쌓는다. 심사 한 건이 수 ms라 외부 수집기로 보내는
 비용이 측정 대상보다 커지고, 폐쇄망 전제라 내보낼 곳도 없다.
+
+**한 건을 되짚는 일은 여기 없다.** 이 파일은 모아서 분위수를 내고, 한 건의
+실행 기록은 `tracing.py`가 맡는다. 둘이 답하는 질문이 다르다 —
+"HUMAN_REVIEW가 몇 건인가"와 "이 건이 왜 HUMAN_REVIEW인가"(notes/041).
 """
 
 from __future__ import annotations
 
-import time
 from collections import defaultdict
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from statistics import median
 
@@ -102,18 +103,3 @@ class Registry:
 
 # 프로세스 전역 레지스트리. 심사 경로가 하나뿐이라 주입할 이유가 없다.
 REGISTRY = Registry()
-
-
-@contextmanager
-def track(name: str, registry: Registry | None = None) -> Iterator[None]:
-    """블록의 실행 시간을 잰다. 예외가 나도 실패로 기록하고 다시 던진다."""
-    target = registry or REGISTRY
-    started = time.perf_counter()
-    ok = True
-    try:
-        yield
-    except Exception:
-        ok = False
-        raise
-    finally:
-        target.record(name, (time.perf_counter() - started) * 1000, ok=ok)

@@ -20,6 +20,7 @@ from neo4j import Driver
 
 from ..access import AccessDeniedError, Principal
 from ..observability import REGISTRY
+from ..tracing import span, trace
 from . import amount as amount_agent
 from . import guardrails
 from .amount_rules import find_rule
@@ -65,7 +66,22 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
     LangGraph로 같은 흐름을 짜면서 종료 엣지를 한 노드로 모아 봤고
     (notes/040), 그 성질이 프레임워크 없이도 되는 것이라 가져왔다.
     `_run`이 초안을 만들고, 가드레일은 **여기 한 줄**에서만 걸린다.
+
+    한 건마다 트레이스를 연다(notes/041). 집계만으로는 "**이** 건이 왜
+    HUMAN_REVIEW인가"를 답할 수 없다.
     """
+    with trace(f"{claim.claim_id} {claim.product}") as record:
+        result = _adjudicate(driver, claim, principal=principal)
+        record.outcome = str(result.decision)
+        record.verdict = (
+            f"{result.decision} (가드레일 {', '.join(result.guardrails)})"
+            if result.guardrails
+            else str(result.decision)
+        )
+        return result.model_copy(update={"trace_id": record.trace_id})
+
+
+def _adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudication:
     steps: list[StepResult] = []
     masked_narrative, masked = guardrails.mask_pii(claim.narrative)
     if masked:
@@ -266,6 +282,15 @@ def _finalize(
     REGISTRY.increment(f"decision:{final.decision}")
     for name in final.guardrails:
         REGISTRY.increment(f"guardrail:{name}")
+    with span("검증/심판") as entry:
+        entry.attributes.update(
+            {
+                "before": str(decision),
+                "after": str(final.decision),
+                "guardrails": ",".join(final.guardrails) or "-",
+                "version": version or "-",
+            }
+        )
     return final.model_copy(update={"steps": (*final.steps, verdict)})
 
 
@@ -275,13 +300,23 @@ def _days_since(claim: Claim) -> int | None:
 
 
 def _timed(name: str, run: Callable):
-    """스텝 실행 시간을 재고, 결과를 StepResult로 감쌀 클로저를 함께 준다."""
+    """스텝 실행 시간을 재고, 결과를 StepResult로 감쌀 클로저를 함께 준다.
+
+    집계(`REGISTRY`)와 추적(`span`)에 **같은 자리에서** 넣는다. 두 군데를
+    따로 부르게 두면 스텝을 더하면서 하나를 빠뜨리고, 그러면 집계에는
+    있는데 트레이스에는 없는 스텝이 생긴다 — notes/023의 모양이다.
+    """
     started = time.perf_counter()
-    value = run()
+    with span(name) as entry:
+        value = run()
     elapsed = (time.perf_counter() - started) * 1000
     REGISTRY.record(name, elapsed)
 
     def build(*, ok: bool, summary: str, evidence: tuple = (), detail: dict | None = None):
+        # 스텝이 무엇을 보고 무엇을 정했는지를 스팬에 싣는다. 이것이 없으면
+        # 트레이스가 "얼마나 걸렸나"만 말하고 "왜 그랬나"는 못 말한다.
+        entry.ok = ok
+        entry.attributes.update({"summary": summary, **(detail or {})})
         return StepResult(
             step=name,
             ok=ok,

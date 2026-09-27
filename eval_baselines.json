@@ -1,0 +1,21 @@
+{
+  "metrics": {
+    "구조": {
+      "finalize_call_sites": 2.0,
+      "mcp_tools": 10.0,
+      "guarded_tools": 10.0
+    },
+    "면책 recall": {
+      "vector_recall": 0.3287037037037037,
+      "graph_recall": 1.0,
+      "vec_graph_recall": 0.8611111111111112,
+      "lexical_recall": 0.05555555555555555
+    },
+    "권한 누수": {
+      "leaks_after_gate": 0.0
+    },
+    "오케스트레이터 일치": {
+      "agreement": 1.0
+    }
+  }
+}
