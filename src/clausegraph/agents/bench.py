@@ -19,11 +19,15 @@ from datetime import date, timedelta
 
 from neo4j import GraphDatabase
 
+from ..access import Principal
 from ..observability import REGISTRY, Registry
 from .extract import extract_claim
 from .models import ClaimHistory
 from .orchestrator import adjudicate
 from .terminology import lookup
+
+# 지연만 재는 자리라 권한으로 결과가 줄면 측정이 흐려진다.
+BENCH_PRINCIPAL = Principal.everything("bench")
 
 WARMUP_CLAIMS = 5
 SEED = 20260905
@@ -119,7 +123,7 @@ def run(count: int) -> int:
                 enrich=lookup,
                 history=history,
             )
-            adjudicate(driver, claim)
+            adjudicate(driver, claim, principal=BENCH_PRINCIPAL)
     finally:
         driver.close()
 

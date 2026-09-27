@@ -17,6 +17,7 @@ from datetime import date
 
 from neo4j import Driver
 
+from ..access import AccessDeniedError, Principal
 from ..observability import REGISTRY
 from . import amount as amount_agent
 from . import guardrails
@@ -28,16 +29,33 @@ from .models import Adjudication, Claim, Decision, Evidence, StepResult
 MAX_EVIDENCE = 6
 
 
-def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
+def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudication:
+    """청구 한 건을 판정한다.
+
+    `principal`은 키워드 필수다. 이 값이 아래 세 스텝으로 그대로 흘러가고,
+    그중 어느 하나라도 빠뜨리면 그 스텝만 전 상품을 보게 된다 — 판정
+    전체가 아니라 **한 스텝만** 새는 것이라 결과만 봐서는 안 보인다
+    (notes/039).
+    """
     steps: list[StepResult] = []
 
     masked_narrative, masked = guardrails.mask_pii(claim.narrative)
     if masked:
         claim = claim.model_copy(update={"narrative": masked_narrative})
 
+    # 권한 거절은 판정이 아니다. 조회할 수 없는 상품에 대해 NEEDS_DOCS를
+    # 내면 "서류를 더 내면 된다"는 뜻이 되는데 사실이 아니다.
+    try:
+        principal.require(claim.product)
+    except AccessDeniedError:
+        REGISTRY.increment("access_denied:상품 권한 없음")
+        raise
+
     version, step = _timed(
         "보장탐색:버전확정",
-        lambda: resolve_version(driver, claim.enrolled_on, claim.product),
+        lambda: resolve_version(
+            driver, claim.enrolled_on, claim.product, principal=principal
+        ),
     )
     steps.append(
         step(
@@ -57,7 +75,8 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
         )
 
     coverage_evidence, step = _timed(
-        "보장탐색:조항", lambda: find_coverage(driver, claim.product, version)
+        "보장탐색:조항",
+        lambda: find_coverage(driver, claim.product, version, principal=principal),
     )
     steps.append(
         step(
@@ -75,7 +94,9 @@ def adjudicate(driver: Driver, claim: Claim) -> Adjudication:
             (), version, steps, amount_computed=False, uncertain=False, masked=masked,
         )
 
-    screened, step = _timed("면책검증", lambda: screen(driver, claim, version))
+    screened, step = _timed(
+        "면책검증", lambda: screen(driver, claim, version, principal=principal)
+    )
     hits, considered = screened
     certain = [hit for hit in hits if hit.certain]
     uncertain = [hit for hit in hits if not hit.certain]

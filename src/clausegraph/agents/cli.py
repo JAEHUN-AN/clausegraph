@@ -15,10 +15,14 @@ from datetime import date
 
 from neo4j import GraphDatabase
 
+from ..access import Principal
 from .extract import extract_claim
 from .models import Adjudication, ClaimHistory
 from .orchestrator import adjudicate
 from .terminology import lookup
+
+# 데모는 전 상품을 보여 준다. 권한을 재는 자리는 access_eval.py다.
+DEMO_PRINCIPAL = Principal.everything("demo")
 
 NON_BENEFIT = "실손의료보험 특별약관1(중증 비급여 실손의료비)"
 ACCIDENT_HEALTH = "질병·상해보험(손해보험 회사용)"
@@ -169,7 +173,7 @@ def run(use_terminology: bool) -> int:
                 history=history,
                 room_charge=room_charge,
             )
-            show(adjudicate(driver, claim))
+            show(adjudicate(driver, claim, principal=DEMO_PRINCIPAL))
     finally:
         driver.close()
     return 0

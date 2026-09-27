@@ -36,6 +36,7 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
+from ..access import Principal
 from ..agents.exclusion import screen
 from ..agents.extract import extract_claim
 from ..agents.terminology import lookup
@@ -54,6 +55,10 @@ ENROLLED_ON = date(2026, 7, 1)
 VERSION = "20260506"
 
 
+# 평가셋은 전수를 봐야 한다.
+EVAL_PRINCIPAL = Principal.everything("eval")
+
+
 @dataclass(frozen=True)
 class Outcome:
     case_slno: int
@@ -70,7 +75,7 @@ def evaluate(driver, cases: dict[int, str], gold: list[dict]) -> list[Outcome]:
         quotes: list[str] = []
         for product in PRODUCTS:
             claim = extract_claim(str(slno), product, ENROLLED_ON, issue, enrich=lookup)
-            hits, _ = screen(driver, claim, VERSION)
+            hits, _ = screen(driver, claim, VERSION, principal=EVAL_PRINCIPAL)
             quotes.extend(hit.evidence.quote for hit in hits)
         keyword = row["gold_keyword"]
         outcomes.append(

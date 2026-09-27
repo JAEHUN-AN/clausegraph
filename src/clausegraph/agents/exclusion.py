@@ -25,6 +25,7 @@ from functools import lru_cache
 
 from neo4j import Driver
 
+from ..access import Principal
 from .kcd import matches
 from .models import Claim, Evidence
 from .quote import prose_quote
@@ -138,12 +139,18 @@ class ExclusionHit:
     exceptions: tuple[Evidence, ...] = ()
 
 
-def enumerate_exclusions(driver: Driver, product: str, version: str) -> list[dict[str, str]]:
+def enumerate_exclusions(
+    driver: Driver, product: str, version: str, *, principal: Principal
+) -> list[dict[str, str]]:
     """그 상품·그 버전의 면책 사유를 전부. 유사도를 쓰지 않는다.
 
     버전이 고정되면 면책 목록은 바뀌지 않는다. 청구마다 다시 긁어 올 이유가
     없어 (상품, 버전)으로 캐시한다.
+
+    **권한 검사가 캐시보다 앞에 온다.** 뒤에 두면 다른 주체가 데워 둔
+    목록을 권한 없는 주체가 그대로 받는다 — 캐시는 권한을 기억하지 않는다.
     """
+    principal.require(product)
     cache_key = (product, version)
     cached = _EXCLUSION_CACHE.get(cache_key)
     if cached is None:
@@ -156,9 +163,13 @@ def enumerate_exclusions(driver: Driver, product: str, version: str) -> list[dic
     return cached
 
 
-def screen(driver: Driver, claim: Claim, version: str) -> tuple[list[ExclusionHit], int]:
+def screen(
+    driver: Driver, claim: Claim, version: str, *, principal: Principal
+) -> tuple[list[ExclusionHit], int]:
     """열거한 뒤 걸러낸다. (걸린 것, 전체 검토 수)를 돌려준다."""
-    candidates = enumerate_exclusions(driver, claim.product, version)
+    candidates = enumerate_exclusions(
+        driver, claim.product, version, principal=principal
+    )
     haystack = f"{claim.narrative} {claim.procedure or ''}"
     distinctive = _distinctive_tokens(driver, version)
 
