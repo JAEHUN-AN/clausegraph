@@ -856,3 +856,22 @@ def test_ambiguous_product_without_codes_yields_no_rule() -> None:
     from clausegraph.agents.amount_rules import find_rule
 
     assert find_rule("기본형 실손의료보험(급여 실손의료비)", None, ()) is None
+
+
+def test_guardrails_run_at_exactly_one_place() -> None:
+    """`_finalize`를 부르는 곳이 하나여야 한다.
+
+    예전에는 종료 지점 넷이 각자 `_finalize`를 불렀다. 그건 "모든 경로가
+    가드레일을 지난다"를 **약속**으로 지키는 것이고, 다섯 번째 `return`을
+    쓰면서 빠뜨리면 그 경로만 가드레일 없이 나간다. 가드레일은 대부분의
+    청구에서 발동하지 않으므로 결과를 봐서는 안 보인다.
+
+    LangGraph로 같은 흐름을 짜면서 종료 엣지를 한 노드로 모아 보고
+    (notes/040) 그 성질을 프레임워크 없이 가져왔다. 되돌아가는 것을 막는다.
+    """
+    from pathlib import Path
+
+    source = Path("src/clausegraph/agents/orchestrator.py").read_text(encoding="utf-8")
+
+    # 정의 한 번 + 호출 한 번.
+    assert source.count("_finalize(") == 2

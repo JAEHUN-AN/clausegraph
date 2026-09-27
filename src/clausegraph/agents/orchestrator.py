@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 
 from neo4j import Driver
@@ -29,6 +30,25 @@ from .models import Adjudication, Claim, Decision, Evidence, StepResult
 MAX_EVIDENCE = 6
 
 
+@dataclass(frozen=True)
+class _Draft:
+    """가드레일을 거치기 **전**의 판정.
+
+    스텝들이 만드는 것은 이것이고, 이것이 판정이 되는 곳은 `adjudicate`의
+    마지막 한 줄뿐이다(notes/040).
+    """
+
+    decision: Decision
+    reason: str
+    evidence: tuple[Evidence, ...]
+    version: str | None
+    amount_computed: bool
+    uncertain: bool
+    amount: int = 0
+    amount_is_upper_bound: bool = False
+    amount_is_lower_bound: bool = False
+
+
 def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudication:
     """청구 한 건을 판정한다.
 
@@ -36,9 +56,17 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
     그중 어느 하나라도 빠뜨리면 그 스텝만 전 상품을 보게 된다 — 판정
     전체가 아니라 **한 스텝만** 새는 것이라 결과만 봐서는 안 보인다
     (notes/039).
+
+    **종료 지점이 하나다.** 예전에는 `_finalize`를 네 군데에서 불렀는데,
+    그건 "모든 경로가 가드레일을 지난다"를 **약속**으로 지키는 것이었다.
+    다섯 번째 `return`을 쓰면서 빠뜨리면 그 경로만 가드레일 없이 나가고,
+    가드레일은 대부분의 청구에서 발동하지 않으므로 결과를 봐서는 안 보인다.
+
+    LangGraph로 같은 흐름을 짜면서 종료 엣지를 한 노드로 모아 봤고
+    (notes/040), 그 성질이 프레임워크 없이도 되는 것이라 가져왔다.
+    `_run`이 초안을 만들고, 가드레일은 **여기 한 줄**에서만 걸린다.
     """
     steps: list[StepResult] = []
-
     masked_narrative, masked = guardrails.mask_pii(claim.narrative)
     if masked:
         claim = claim.model_copy(update={"narrative": masked_narrative})
@@ -51,6 +79,20 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
         REGISTRY.increment("access_denied:상품 권한 없음")
         raise
 
+    draft = _run(driver, claim, steps, principal)
+    return _finalize(
+        claim, draft.decision, draft.reason, draft.evidence, draft.version, steps,
+        amount_computed=draft.amount_computed, uncertain=draft.uncertain,
+        masked=masked, amount=draft.amount,
+        amount_is_upper_bound=draft.amount_is_upper_bound,
+        amount_is_lower_bound=draft.amount_is_lower_bound,
+    )
+
+
+def _run(
+    driver: Driver, claim: Claim, steps: list[StepResult], principal: Principal
+) -> _Draft:
+    """스텝을 순서대로 돌려 판정 초안을 만든다. 가드레일은 걸지 않는다."""
     version, step = _timed(
         "보장탐색:버전확정",
         lambda: resolve_version(
@@ -69,9 +111,10 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
     )
     if version is None:
         REGISTRY.increment("needs_docs:버전 없음")
-        return _finalize(
-            claim, Decision.NEEDS_DOCS, "가입 시점의 약관을 특정하지 못했다",
-            (), None, steps, amount_computed=False, uncertain=False, masked=masked,
+        return _Draft(
+            decision=Decision.NEEDS_DOCS,
+            reason="가입 시점의 약관을 특정하지 못했다",
+            evidence=(), version=None, amount_computed=False, uncertain=False,
         )
 
     coverage_evidence, step = _timed(
@@ -89,9 +132,10 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
         # 가입 시점에 그 상품이 없던 경우가 대부분이다 — 실손 특별약관1/2는
         # 2026-05-06에 생겼다. 거절이 맞는 동작이고, 왜 거절했는지 센다.
         REGISTRY.increment("needs_docs:그 시점에 상품 없음")
-        return _finalize(
-            claim, Decision.NEEDS_DOCS, f"{claim.product}의 보장 조항을 찾지 못했다",
-            (), version, steps, amount_computed=False, uncertain=False, masked=masked,
+        return _Draft(
+            decision=Decision.NEEDS_DOCS,
+            reason=f"{claim.product}의 보장 조항을 찾지 못했다",
+            evidence=(), version=version, amount_computed=False, uncertain=False,
         )
 
     screened, step = _timed(
@@ -116,15 +160,16 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
         # 면책 근거와 함께 그 면책의 '다만' 단서가 가리키는 조문도 낸다.
         # "면책에 걸렸다"까지만 말하면 청구인에게는 절반만 답한 것이다 —
         # 예외 조항이 다시 보상을 열어 줄 수 있다(notes/022).
-        return _finalize(
-            claim, Decision.DENIED, certain[0].reason,
-            (
+        return _Draft(
+            decision=Decision.DENIED,
+            reason=certain[0].reason,
+            evidence=(
                 *(hit.evidence for hit in certain),
                 *(e for hit in certain for e in hit.exceptions),
             ),
-            version, steps,
+            version=version,
             # 코드로 확정된 면책이므로 불확실 히트가 결론을 흔들지 않는다.
-            amount_computed=True, uncertain=False, masked=masked,
+            amount_computed=True, uncertain=False,
         )
 
     # 불확실 면책이 가리키는 보장종목이 있으면 그 종목의 파라미터를 쓴다.
@@ -165,10 +210,10 @@ def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudic
         *(hit.evidence for hit in uncertain[:2]),
         *(e for hit in uncertain[:2] for e in hit.exceptions),
     )
-    return _finalize(
-        claim, decision, computed.basis, evidence, version, steps,
+    return _Draft(
+        decision=decision, reason=computed.basis, evidence=evidence, version=version,
         amount_computed=computed.computed, uncertain=bool(uncertain),
-        masked=masked, amount=computed.value,
+        amount=computed.value,
         amount_is_upper_bound=computed.is_upper_bound,
         amount_is_lower_bound=computed.is_lower_bound,
     )

@@ -17,7 +17,7 @@ jobs:
           enable-cache: true
 
       - name: 의존성
-        run: uv sync --extra dev --extra graph --extra mcp
+        run: uv sync --extra dev --extra graph --extra mcp --extra langgraph
 
       - name: ruff
         run: uv run ruff check src tests
@@ -33,3 +33,7 @@ jobs:
 #
 # 대신 그 측정들이 의존하는 규칙 — 코드 범위 파싱, 표 셀 이어붙이기, 조문
 # 구조, 가드레일 — 은 전부 단위 테스트로 고정해 뒀다. 회귀는 여기서 잡힌다.
+#
+# langgraph extra를 넣는 이유는 tests/test_graph_orchestrator.py 때문이다.
+# 그 테스트는 DB 없이 **그래프 구조만** 본다 — 모든 종료 경로가 가드레일
+# 노드를 지나는지(notes/040). 구조는 CI에서 지킬 수 있다.
