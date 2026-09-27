@@ -42,12 +42,17 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
+from ..access import Principal
 from .embed import get_embedder
 from .lexical import search_lexical
 from .retriever import connect_pg, fuse_rrf, search_graph, search_hybrid, search_vector
 
 DEFAULT_K = 10
 LATEST_DATE = "20260915"
+
+# recall을 재는 자리라 스코프로 결과가 줄면 측정이 흐려진다. 권한을 재는
+# 자리는 `access_eval.py`다 (notes/039).
+EVAL_PRINCIPAL = Principal.everything("recall-eval")
 
 
 @dataclass(frozen=True)
@@ -67,25 +72,34 @@ def _strategies(connection, driver, embedder, k: int, with_rerank: bool):
     """(이름, 실행) 목록. 여기 한 줄을 더하는 것이 전략을 하나 더 재는 일이다."""
 
     def vector(q):
-        return search_vector(connection, embedder, q["query"], k=k)
+        return search_vector(
+            connection, embedder, q["query"], k=k, principal=EVAL_PRINCIPAL
+        )
 
     def lexical(q):
-        return search_lexical(connection, q["query"], k=k)
+        return search_lexical(connection, q["query"], k=k, principal=EVAL_PRINCIPAL)
 
     def lexical_df(q):
-        return search_lexical(connection, q["query"], k=k, distinctive_only=True)
+        return search_lexical(
+            connection, q["query"], k=k, distinctive_only=True,
+            principal=EVAL_PRINCIPAL,
+        )
 
     def lexical_pfx(q):
         return search_lexical(
-            connection, q["query"], k=k, distinctive_only=True, prefix=True
+            connection, q["query"], k=k, distinctive_only=True, prefix=True,
+            principal=EVAL_PRINCIPAL,
         )
 
     def graph(q):
-        return search_graph(driver, q["products"], on_date=LATEST_DATE)
+        return search_graph(
+            driver, q["products"], on_date=LATEST_DATE, principal=EVAL_PRINCIPAL
+        )
 
     def vec_graph(q):
         return search_hybrid(
-            connection, driver, embedder, q["query"], k=k, on_date=LATEST_DATE
+            connection, driver, embedder, q["query"], k=k, on_date=LATEST_DATE,
+            principal=EVAL_PRINCIPAL,
         )
 
     def vec_lex(q):
@@ -115,7 +129,10 @@ def _strategies(connection, driver, embedder, k: int, with_rerank: bool):
         (recall@100 = 88%). 교차 인코더가 그걸 위로 끌어올리면 랭킹 문제가
         맞고, 못 끌어올리면 열거가 맞다.
         """
-        pool = search_vector(connection, embedder, q["query"], k=RERANK_POOL)
+        pool = search_vector(
+            connection, embedder, q["query"], k=RERANK_POOL,
+            principal=EVAL_PRINCIPAL,
+        )
         return rerank(q["query"], pool, limit=k)
 
     def graph_rr(q):
@@ -126,7 +143,9 @@ def _strategies(connection, driver, embedder, k: int, with_rerank: bool):
         10개로 줄일 수 있다면, 리랭킹의 값어치는 **찾는 데가 아니라
         추리는 데** 있다.
         """
-        pool = search_graph(driver, q["products"], on_date=LATEST_DATE)
+        pool = search_graph(
+            driver, q["products"], on_date=LATEST_DATE, principal=EVAL_PRINCIPAL
+        )
         return rerank(q["query"], pool, limit=k)
 
     strategies.extend([("vec100+rr", vec_rr), ("graph+rr", graph_rr)])
