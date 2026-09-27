@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import psycopg
 from neo4j import Driver
-from pgvector.psycopg import register_vector
+
+if TYPE_CHECKING:  # pragma: no cover
+    import psycopg
 
 from ..graph.schema import OPEN_ENDED
 from .embed import Embedder
@@ -61,6 +63,16 @@ class Hit:
 
 
 def connect_pg() -> psycopg.Connection:
+    """pgvector 연결.
+
+    `psycopg`와 `pgvector`를 **여기서** 들인다. 모듈 최상단에서 들이면
+    `rag` extra 없이는 이 파일을 import조차 못 하는데, 순위 융합이나
+    `Hit` 같은 순수한 것들은 드라이버가 필요 없다. CI는 `rag` extra를
+    설치하지 않으므로(torch 2GB) 그쪽에서 단위 테스트가 통째로 깨졌다.
+    """
+    import psycopg
+    from pgvector.psycopg import register_vector
+
     connection = psycopg.connect(os.environ["PG_DSN"])
     register_vector(connection)
     return connection

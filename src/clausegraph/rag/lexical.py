@@ -63,8 +63,10 @@ notes/009가 같은 문제를 이미 풀어 뒀다 — **문서빈도가 낮은 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import psycopg
+if TYPE_CHECKING:  # pragma: no cover
+    import psycopg
 
 # 색인·질의 양쪽이 같은 토큰 규칙을 써야 한다. 심사가 쓰는 것을 그대로
 # 가져온다 — 두 벌 만들면 조용히 어긋난다(notes/023).
