@@ -141,3 +141,33 @@ def search_hybrid(
     for hit in search_graph(driver, products, on_date=on_date):
         merged.setdefault(hit.node_uid, hit)
     return list(merged.values())
+
+
+# 순위 융합 상수. 원 논문(Cormack 2009)의 값이고, 이 규모에서 손댈 근거가 없다.
+RRF_K = 60
+
+
+def fuse_rrf(rankings: list[list[Hit]], *, limit: int | None = None) -> list[Hit]:
+    """여러 순위를 RRF로 섞는다.
+
+    **점수를 섞지 않고 순위만 섞는다.** 코사인 유사도는 0~1이고
+    `ts_rank_cd`는 상한이 없다. 둘을 정규화해 가중합하려면 가중치를 어디선가
+    정해야 하는데, 그 값을 정할 근거가 이 프로젝트에 없다 — 18문항으로
+    맞추면 그 18문항에 맞춘 값이 된다.
+
+    RRF는 각 순위에서 `1/(RRF_K + 순위)`를 더한다. 점수 공식이 달라도
+    되고, 튜닝할 손잡이가 사실상 없다. 그래서 **측정이 정직해진다** —
+    "섞었더니 좋아졌다"가 가중치를 만진 결과가 아니라는 것이 분명하다.
+    """
+    scores: dict[str, float] = {}
+    best: dict[str, Hit] = {}
+    for ranking in rankings:
+        for rank, hit in enumerate(ranking, start=1):
+            scores[hit.node_uid] = scores.get(hit.node_uid, 0.0) + 1.0 / (RRF_K + rank)
+            # 같은 청크가 두 순위에 있으면 먼저 본 쪽을 남긴다. 내용은 같고
+            # `source`만 다르다.
+            best.setdefault(hit.node_uid, hit)
+    ordered = sorted(scores, key=lambda uid: scores[uid], reverse=True)
+    if limit is not None:
+        ordered = ordered[:limit]
+    return [best[uid] for uid in ordered]
