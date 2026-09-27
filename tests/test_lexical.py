@@ -104,3 +104,36 @@ def test_rrf_ignores_score_scale() -> None:
     assert [h.node_uid for h in fuse_rrf([small])] == [
         h.node_uid for h in fuse_rrf([huge])
     ]
+
+
+def test_pure_modules_do_not_need_the_database_driver_at_import() -> None:
+    """`psycopg`·`pgvector`를 모듈 최상단에서 들이지 않아야 한다.
+
+    CI는 `rag` extra를 설치하지 않는다(torch가 2GB라 넣을 값어치가 없다).
+    그런데 순위 융합·`Hit`·어간 토큰화는 드라이버가 필요 없는 순수한
+    것들이다. 최상단에서 들이면 그 순수한 것들의 단위 테스트가 **통째로**
+    깨진다 — 실제로 깨뜨렸고 CI에서야 봤다.
+
+    로컬에서는 extra가 깔려 있어 import가 성공하므로 이 실패가 안 보인다.
+    그래서 소스를 읽어 막는다.
+    """
+    import ast
+    from pathlib import Path
+
+    heavy = {"psycopg", "pgvector"}
+    offenders: list[str] = []
+
+    for name in ("retriever.py", "lexical.py"):
+        path = Path("src/clausegraph/rag") / name
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:  # 최상단만 본다. 함수 안은 괜찮다.
+            if isinstance(node, ast.Import):
+                names = {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                names = {(node.module or "").split(".")[0]}
+            else:
+                continue
+            if names & heavy:
+                offenders.append(f"{path.as_posix()}:{node.lineno}")
+
+    assert not offenders, "최상단에서 드라이버를 들인다: " + ", ".join(offenders)
