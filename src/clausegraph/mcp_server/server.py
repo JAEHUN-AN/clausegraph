@@ -21,10 +21,12 @@ import logging
 import os
 import time
 from datetime import date
+from functools import wraps
 
 from mcp.server.mcpserver import MCPServer
 from neo4j import GraphDatabase
 
+from ..access import AccessDeniedError, Principal
 from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.definition_terms import TermIndex, terms_from_articles
 from ..agents.definition_triage import triage
@@ -38,6 +40,7 @@ from ..agents.quote import prose_quote
 from ..agents.session import STORE, TurnKind
 from ..agents.terminology import lookup
 from ..graph.schema import OPEN_ENDED
+from ..observability import REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,68 @@ mcp = MCPServer(
         "판정은 보조이며 최종 결정은 사람이 한다."
     ),
 )
+
+# 서버 전체의 조회 스코프. **이것은 인증이 아니라 스코프다.**
+# MCP stdio는 호출자를 확인하지 않으므로, 이 값은 악의적인 호출자를 막지
+# 못하고 정직한 호출자가 무엇을 보게 되는지를 정한다. 실제 배포라면 전송
+# 계층에서 주체를 확인해 요청마다 Principal을 만들어야 한다(notes/039).
+_SCOPE_ENV = "CLAUSEGRAPH_SCOPE"
+_principal: Principal | None = None
+
+
+def principal() -> Principal:
+    """환경변수로 정한 스코프. 지정하지 않으면 전 상품이다.
+
+    기본값을 `everything`으로 두는 것이 조용한 기본값이라는 것을 안다
+    (notes/027의 `0`과 같은 모양이다). 그래도 이렇게 둔 이유는, 여기서
+    빈 스코프를 기본으로 하면 **설정을 잊었을 때 도구가 전부 "권한 없음"을
+    돌려주고** 그것이 권한 설정 문제인지 데이터 문제인지 구분되지 않기
+    때문이다. 대신 시작할 때 무엇으로 열렸는지 로그에 남긴다.
+    """
+    global _principal
+    if _principal is None:
+        raw = os.environ.get(_SCOPE_ENV, "").strip()
+        if raw:
+            names = frozenset(part.strip() for part in raw.split(",") if part.strip())
+            _principal = Principal(name="mcp", products=names)
+            logger.info("조회 스코프 %d개 상품: %s", len(names), ", ".join(sorted(names)))
+        else:
+            _principal = Principal.everything("mcp")
+            logger.warning(
+                "%s가 없어 전 상품을 조회한다. 상품을 한정하려면 쉼표로 나눠 설정할 것",
+                _SCOPE_ENV,
+            )
+    return _principal
+
+
+def guarded(tool):
+    """도구 경계에서 예외를 말이 되는 답으로 바꾼다.
+
+    notes/037에서 오류 처리가 **부분**이었던 자리다. 외부 LLM 호출은
+    촘촘한데 도구 경계에는 try/except가 하나도 없어, Neo4j가 죽으면
+    스택트레이스가 그대로 MCP 클라이언트로 나갔다.
+
+    권한 거절은 빈 결과가 아니라 **거절이라고 말한다.** "그 상품에 조항이
+    없다"로 뭉개면 호출한 쪽이 없는 약관을 찾아 헤맨다.
+    """
+
+    @wraps(tool)
+    def run(*args, **kwargs):
+        try:
+            return tool(*args, **kwargs)
+        except AccessDeniedError as exc:
+            REGISTRY.increment(f"mcp_access_denied:{tool.__name__}")
+            return f"권한 없음: {exc}"
+        except Exception:
+            # 무엇이 터졌는지는 서버 로그에 남기고, 호출한 쪽에는 내부
+            # 사정을 흘리지 않는다. 판정 도구가 스택트레이스를 돌려주면
+            # 그것이 그대로 사용자에게 보인다.
+            logger.exception("%s 실패", tool.__name__)
+            REGISTRY.increment(f"mcp_error:{tool.__name__}")
+            return f"{tool.__name__} 실행 중 오류가 났다. 서버 로그를 확인할 것."
+
+    return run
+
 
 _driver = None
 
@@ -132,6 +197,7 @@ def term_index() -> TermIndex:
 
 
 @mcp.tool()
+@guarded
 def list_products() -> str:
     """조회할 수 있는 약관 상품과 수집된 시행일자 범위를 반환한다.
 
@@ -143,6 +209,14 @@ def list_products() -> str:
         products = [dict(record) for record in session.run(_PRODUCTS)]
         versions = [dict(record) for record in session.run(_VERSIONS)]
 
+    # **목록 자체가 새는 자리다.** 조항을 안 돌려줘도 어떤 상품이 있는지
+    # 알려 주면 스코프 밖 상품의 존재가 드러난다. 여기서 걸러야 다른
+    # 도구가 "그런 상품 없다"고 할 때 말이 맞는다.
+    who = principal()
+    hidden = len(products)
+    products = [row for row in products if who.can_see(str(row["product"]))]
+    hidden -= len(products)
+
     lines = [f"수집된 약관 버전 {len(versions)}개:"]
     for version in versions:
         end = "현재" if version["effective_to"] == OPEN_ENDED else version["effective_to"]
@@ -150,6 +224,8 @@ def list_products() -> str:
             f"  {version['effective_from']} ~ {end}  조문 {version['article_count']}"
         )
     lines.append(f"약관 상품 {len(products)}개:")
+    if hidden:
+        lines.append(f"  (조회 스코프 밖 {hidden}개는 표시하지 않는다)")
     for product in products:
         lines.append(
             f"  {product['product']}  (버전 {product['versions']}개, "
@@ -159,6 +235,7 @@ def list_products() -> str:
 
 
 @mcp.tool()
+@guarded
 def resolve_terms_version(enrolled_on: str, product: str = "") -> str:
     """가입일에 적용되던 약관 버전을 찾는다. `enrolled_on`은 YYYY-MM-DD.
 
@@ -214,6 +291,7 @@ def resolve_terms_version(enrolled_on: str, product: str = "") -> str:
 
 
 @mcp.tool()
+@guarded
 def list_exclusions(product: str, enrolled_on: str) -> str:
     """그 상품·그 가입 시점의 면책 조항을 **전부** 반환한다.
 
@@ -230,7 +308,7 @@ def list_exclusions(product: str, enrolled_on: str) -> str:
     if version is None:
         return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
-    rows = enumerate_exclusions(driver(), product, version)
+    rows = enumerate_exclusions(driver(), product, version, principal=principal())
     if not rows:
         return (
             f"{product}의 면책 조항을 찾지 못했다. "
@@ -248,6 +326,7 @@ def list_exclusions(product: str, enrolled_on: str) -> str:
 
 
 @mcp.tool()
+@guarded
 def check_diagnosis_codes(product: str, enrolled_on: str, codes: str) -> str:
     """진단코드가 면책 범위에 드는지 결정론적으로 확인한다.
 
@@ -270,7 +349,7 @@ def check_diagnosis_codes(product: str, enrolled_on: str, codes: str) -> str:
     if not wanted:
         return "확인할 진단코드가 없다."
 
-    rows = enumerate_exclusions(driver(), product, version)
+    rows = enumerate_exclusions(driver(), product, version, principal=principal())
     scanned = [(row, matches(row["text"], wanted)) for row in rows]
     hits = [(row, matched) for row, matched in scanned if matched]
 
@@ -294,6 +373,7 @@ def check_diagnosis_codes(product: str, enrolled_on: str, codes: str) -> str:
 
 
 @mcp.tool()
+@guarded
 def search_clauses(query: str, limit: int = 8) -> str:
     """조문을 문장 유사도로 찾는다. 서술형 질문에 쓴다.
 
@@ -308,7 +388,10 @@ def search_clauses(query: str, limit: int = 8) -> str:
     from ..rag.retriever import connect_pg, search_vector
 
     with connect_pg() as connection:
-        hits = search_vector(connection, get_embedder(), query, k=min(limit, MAX_ROWS))
+        hits = search_vector(
+            connection, get_embedder(), query,
+            k=min(limit, MAX_ROWS), principal=principal(),
+        )
 
     if not hits:
         return "일치하는 조문이 없다."
@@ -325,6 +408,7 @@ def search_clauses(query: str, limit: int = 8) -> str:
 
 
 @mcp.tool()
+@guarded
 def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
     """청구 내용에 걸릴 수 있는 면책을 골라낸다. 확실/불확실을 나눠 준다.
 
@@ -341,7 +425,7 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
         return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
     claim = extract_claim("MCP", product, parsed, narrative, enrich=lookup)
-    hits, considered = screen(driver(), claim, version)
+    hits, considered = screen(driver(), claim, version, principal=principal())
     certain = [hit for hit in hits if hit.certain]
     uncertain = [hit for hit in hits if not hit.certain]
 
@@ -369,6 +453,7 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
 
 
 @mcp.tool()
+@guarded
 def adjudicate_claim(
     product: str,
     enrolled_on: str,
@@ -431,13 +516,14 @@ def adjudicate_claim(
         history=history,
         room_charge=max(0, room_charge),
     )
-    result = adjudicate(driver(), claim)
+    result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
     session = STORE.open(claim, result, rendered)
     return f"{rendered}\n대화 id {session.session_id} — 후속 질문은 `follow_up`."
 
 
 @mcp.tool()
+@guarded
 def triage_definition(issue: str) -> str:
     """약관 **용어의 뜻**을 다투는 쟁점을 받아, 판단에 무엇이 필요한지 알려준다.
 
@@ -467,6 +553,7 @@ def triage_definition(issue: str) -> str:
 
 
 @mcp.tool()
+@guarded
 def follow_up(session_id: str, question: str) -> str:
     """앞서 심사한 건에 이어 묻는다. 판정 이유·근거 조항·필요 서류·지급액.
 
@@ -495,6 +582,7 @@ def follow_up(session_id: str, question: str) -> str:
 
 
 @mcp.tool()
+@guarded
 def revise_claim(
     session_id: str,
     paid_this_year: int = -1,
@@ -523,7 +611,7 @@ def revise_claim(
     before = session.adjudication
     claim = _revise(session.claim, paid_this_year, outpatient_visits_this_year,
                     self_paid_this_year, room_charge, narrative)
-    result = adjudicate(driver(), claim)
+    result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
     STORE.save(
         session.with_turn(
@@ -645,7 +733,7 @@ def _version_for_product(parsed: date, enrolled_on: str, product: str) -> str:
     # **판본이 정해져도 그 안의 조문 몇 개는 아직 옛 내용일 수 있다.**
     # 부칙이 조문 단위로 시행일을 따로 정하는 경우가 있고, 조문 단위 버전이
     # 없는 지금 구조로는 그 조문만 되돌릴 수 없다(notes/030).
-    scoped = article_scoped_notes(driver(), version, product)
+    scoped = article_scoped_notes(driver(), version, product, principal=principal())
     if scoped:
         lines.append(
             "주의: 이 판본에는 **조문 일부만** 시행일을 따로 정한 부칙이 있다. "
@@ -670,7 +758,7 @@ def _version_of(enrolled_on: date, product: str) -> str | None:
     새 약관을 한 달 일찍 들이댄다. 실측으로 가입일×상품 1,472쌍 중 32쌍
     (2.2%)이 어긋났다 — 심사 에이전트와 MCP 도구가 서로 다른 답을 냈다.
     """
-    return resolve_version(driver(), enrolled_on, product)
+    return resolve_version(driver(), enrolled_on, product, principal=principal())
 
 
 def _parse_date(value: str) -> date | None:

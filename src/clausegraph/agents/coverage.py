@@ -21,6 +21,7 @@ from datetime import date
 
 from neo4j import Driver
 
+from ..access import Principal
 from ..law.appendix import Provision, same_product
 from .models import Evidence
 from .quote import prose_quote
@@ -99,13 +100,22 @@ def applies_from(row: dict[str, object], product: str | None) -> str:
 
 
 def resolve_version(
-    driver: Driver, enrolled_on: date, product: str | None = None
+    driver: Driver,
+    enrolled_on: date,
+    product: str | None = None,
+    *,
+    principal: Principal,
 ) -> str | None:
     """가입일에 그 상품에 적용되던 약관 버전. 없으면 None.
 
     `product`를 주지 않으면 부칙의 적용일을 상품 구분 없이 쓴다 — 개요용이며,
     판정에는 반드시 상품을 함께 넘겨야 한다.
+
+    `principal`은 **키워드 필수**다. 기본값을 두면 넘기는 것을 잊어도 조용히
+    통과하고, 잊었다는 것이 드러나지 않는다(notes/039).
     """
+    if product is not None:
+        principal.require(product)
     on_date = enrolled_on.strftime("%Y%m%d")
     starts = sorted(
         (applies_from(row, product), str(row["effective_from"]))
@@ -121,13 +131,16 @@ def resolve_version(
     return chosen
 
 
-def article_scoped_notes(driver: Driver, version: str, product: str) -> tuple[str, ...]:
+def article_scoped_notes(
+    driver: Driver, version: str, product: str, *, principal: Principal
+) -> tuple[str, ...]:
     """그 판본에서 **조문 일부만** 바꾼 부칙. 그 상품에 걸리는 것만.
 
     이런 부칙으로는 버전을 옮기지 않는다(notes/030). 대신 그 사실을 답에
     실어야 한다 — "이 판본이 적용된다"고만 말하면, 그 안에서 조문 몇 개는
     아직 옛 내용이라는 사실이 사라진다.
     """
+    principal.require(product)
     with driver.session() as session:
         rows = [dict(record) for record in session.run(
             _ARTICLE_SCOPED_PROVISIONS, version=version
@@ -145,7 +158,19 @@ def article_scoped_notes(driver: Driver, version: str, product: str) -> tuple[st
     return tuple(notes)
 
 
-def find_coverage(driver: Driver, product: str, version: str) -> tuple[Evidence, ...]:
+def find_coverage(
+    driver: Driver, product: str, version: str, *, principal: Principal
+) -> tuple[Evidence, ...]:
+    """그 상품·그 판본의 보장 조항.
+
+    상품을 **이름으로 지목**하는 자리라 못 보는 상품이면 거절한다. 빈
+    결과로 돌려주지 않는다 — "조항이 없다"와 "볼 수 없다"는 다른 말이고,
+    앞의 말로 뭉개면 심사자가 없는 약관을 찾아 헤맨다.
+
+    캐시는 권한 검사 **뒤에** 본다. 앞에 두면 다른 주체가 데워 둔 값을
+    권한 없는 주체가 그대로 받는다.
+    """
+    principal.require(product)
     cache_key = (product, version)
     cached = _COVERAGE_CACHE.get(cache_key)
     if cached is not None:

@@ -70,6 +70,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 # 색인·질의 양쪽이 같은 토큰 규칙을 써야 한다. 심사가 쓰는 것을 그대로
 # 가져온다 — 두 벌 만들면 조용히 어긋난다(notes/023).
+from ..access import Principal
 from ..agents.exclusion import stemmed_tokens
 from .retriever import Hit
 
@@ -95,6 +96,8 @@ SELECT node_uid, node_kind, product, article_number, article_title,
 FROM clause_chunk
 WHERE lexeme @@ to_tsquery('simple', %s)
   AND (%s::text IS NULL OR effective_from = %s)
+  -- 권한 게이트. 벡터 쪽과 같은 규칙을 같은 자리(LIMIT 앞)에 건다.
+  AND (%s::text[] IS NULL OR product = ANY(%s::text[]))
 ORDER BY score DESC
 LIMIT %s
 """
@@ -209,6 +212,7 @@ def search_lexical(
     effective_from: str | None = None,
     distinctive_only: bool = False,
     prefix: bool = False,
+    principal: Principal,
 ) -> list[Hit]:
     """어간 일치로 k개. 걸리는 것이 없으면 빈 리스트다.
 
@@ -225,9 +229,11 @@ def search_lexical(
         tsquery = to_tsquery_or(query)
     if not tsquery:
         return []
+    allowed = None if principal.unrestricted else sorted(principal.products)
     with connection.cursor() as cursor:
         cursor.execute(
-            _LEXICAL_SEARCH, (tsquery, tsquery, effective_from, effective_from, k)
+            _LEXICAL_SEARCH,
+            (tsquery, tsquery, effective_from, effective_from, allowed, allowed, k),
         )
         return [
             Hit(

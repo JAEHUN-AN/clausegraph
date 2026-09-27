@@ -141,6 +141,7 @@ def test_pure_modules_import_without_the_heavy_extras() -> None:
         sys.meta_path.insert(0, Blocker())
         import clausegraph.rag.retriever
         import clausegraph.rag.lexical
+        import clausegraph.access
         print("ok")
     """)
 

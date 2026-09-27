@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from neo4j import Driver
 
+from ..access import Principal, visible
 from ..graph.schema import OPEN_ENDED
 
 # 드라이버와 임베더는 **타입으로만** 쓴다. 최상단에서 들이면 `rag`·`onnx`
@@ -36,6 +37,10 @@ SELECT node_uid, node_kind, product, article_number, article_title,
 FROM clause_chunk
 WHERE embedding IS NOT NULL
   AND (%s::text IS NULL OR effective_from = %s)
+  -- 권한 게이트. NULL이면 제한 없음(적재·평가용), 아니면 그 목록 안에서만.
+  -- **LIMIT보다 앞에서 걸러야 한다.** 뒤에서 걸러내면 k개를 뽑아 그중
+  -- 스코프 밖을 버리게 되어, 권한이 좁을수록 결과가 조용히 적어진다.
+  AND (%s::text[] IS NULL OR product = ANY(%s::text[]))
 ORDER BY embedding <=> %s::vector
 LIMIT %s
 """
@@ -46,6 +51,9 @@ MATCH (v:Version)
 WHERE v.effective_from <= $on_date AND $on_date < v.effective_to
 MATCH (a:Article:Exclusion)-[:IN_VERSION]->(v)
 MATCH (a)-[:OF_PRODUCT]->(p:Product)
+// 호출부가 준 목록과 주체의 스코프를 **둘 다** 만족해야 한다. 교집합은
+// 파이썬에서 미리 낸다 — 여기서 두 목록을 받으면 질의가 권한을 아는
+// 곳이 되고, 그러면 권한 규칙이 두 군데가 된다.
 WHERE p.name IN $products
 MATCH (a)-[:HAS_ITEM]->(i:Item)
 RETURN i.uid AS node_uid, p.name AS product, a.number AS article_number,
@@ -89,11 +97,19 @@ def search_vector(
     *,
     k: int = DEFAULT_K,
     effective_from: str | None = None,
+    principal: Principal,
 ) -> list[Hit]:
+    """문장 유사도 k개. 주체가 못 보는 상품은 **질의에서** 빠진다.
+
+    검색은 상품을 이름으로 지목하지 않으므로 거절할 것이 없다. 안 보이는
+    것은 없는 것으로 둔다 — "검색했는데 권한 오류"는 쓸모가 없다.
+    """
     vector = embedder.encode([query])[0]
+    allowed = None if principal.unrestricted else sorted(principal.products)
     with connection.cursor() as cursor:
         cursor.execute(
-            _VECTOR_SEARCH, (vector, effective_from, effective_from, vector, k)
+            _VECTOR_SEARCH,
+            (vector, effective_from, effective_from, allowed, allowed, vector, k),
         )
         return [
             Hit(
@@ -112,9 +128,19 @@ def search_vector(
 
 
 def search_graph(
-    driver: Driver, products: list[str], *, on_date: str = OPEN_ENDED[:8]
+    driver: Driver,
+    products: list[str],
+    *,
+    on_date: str = OPEN_ENDED[:8],
+    principal: Principal,
 ) -> list[Hit]:
-    """상품의 면책 조항을 그 시점 기준으로 전부."""
+    """상품의 면책 조항을 그 시점 기준으로 전부.
+
+    호출부가 준 목록을 스코프와 교차한다. 교차 결과가 비면 빈 리스트다 —
+    호출부가 이름을 지목했다기보다 **후보를 넘긴** 자리라 거절하지 않는다.
+    """
+    if not principal.unrestricted:
+        products = [name for name in products if principal.can_see(name)]
     if not products:
         return []
     with driver.session() as session:
@@ -144,19 +170,27 @@ def search_hybrid(
     k: int = DEFAULT_K,
     on_date: str,
     effective_from: str | None = None,
+    principal: Principal,
 ) -> list[Hit]:
     """벡터로 들어가 그래프로 넓힌다.
 
     벡터가 어느 상품 이야기인지는 대체로 맞힌다. 놓치는 것은 그 상품의
     **면책**이다. 그래서 걸린 상품들의 면책 조항을 구조로 끌어올린다.
     """
-    seeds = search_vector(connection, embedder, query, k=k, effective_from=effective_from)
+    seeds = search_vector(
+        connection, embedder, query, k=k, effective_from=effective_from,
+        principal=principal,
+    )
+    # **여기가 이 파일에서 가장 새기 쉬운 자리였다.** 상품 목록이 호출부가
+    # 아니라 **벡터 결과에서** 나온다. 벡터를 안 막으면 스코프 밖 상품이
+    # 씨앗으로 잡히고, 그 상품의 면책이 그래프로 통째로 끌려 올라온다.
+    # 씨앗 한 건이 조항 수십 개로 번진다(notes/039).
     products = list(dict.fromkeys(hit.product for hit in seeds))
 
     merged: dict[str, Hit] = {hit.node_uid: hit for hit in seeds}
-    for hit in search_graph(driver, products, on_date=on_date):
+    for hit in search_graph(driver, products, on_date=on_date, principal=principal):
         merged.setdefault(hit.node_uid, hit)
-    return list(merged.values())
+    return visible(principal, list(merged.values()), product_of=lambda hit: hit.product)
 
 
 # 순위 융합 상수. 원 논문(Cormack 2009)의 값이고, 이 규모에서 손댈 근거가 없다.
