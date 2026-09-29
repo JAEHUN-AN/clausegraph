@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import os
 import time
@@ -41,6 +42,7 @@ from ..agents.session import STORE, TurnKind
 from ..agents.terminology import lookup
 from ..graph.schema import OPEN_ENDED
 from ..observability import REGISTRY
+from ..product_names import ProductMatch, match_product
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +122,68 @@ def guarded(tool):
             return f"{tool.__name__} 실행 중 오류가 났다. 서버 로그를 확인할 것."
 
     return run
+
+
+def _product_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """그래프의 상품 이름 — (전체, 조회 스코프 안)."""
+    with driver().session() as session:
+        every = tuple(str(record["product"]) for record in session.run(_PRODUCTS))
+    who = principal()
+    return every, tuple(name for name in every if who.can_see(name))
+
+
+def canonical_product(tool):
+    """`product` 인자를 그래프의 정식 명칭으로 확정한 뒤 도구를 부른다.
+
+    상품명이 한 글자만 달라도 조항이 0개로 나오고, 그 0개가 오류가 아니라
+    `NEEDS_DOCS` **판정**으로 나간다. 줄인 이름 하나로 면책 3건이 걸려야 할
+    청구가 서류 보완 요청이 됐다(product_names 모듈 설명).
+
+    - 하나로 좁혀지면 바꾸고, 응답 첫 줄에 **바꿨다고 적는다.**
+    - 둘 이상이거나 없으면 도구를 부르지 않는다. 판정 대신 되물을 후보를 준다.
+    - 후보는 **스코프 안에서만** 찾는다. 그래야 후보 목록이 스코프 밖 상품의
+      존재를 흘리지 않는다. 반대로 스코프 밖이라도 **정확한 이름**은 그대로
+      넘겨 권한 게이트가 "권한 없음"이라고 말하게 둔다.
+    """
+    signature = inspect.signature(tool)
+
+    @wraps(tool)
+    def run(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        product = bound.arguments.get("product", "")
+        if not product:
+            return tool(*args, **kwargs)
+
+        every, visible = _product_names()
+        if product in every:
+            return tool(*args, **kwargs)
+
+        match = match_product(product, visible)
+        if match.name is None:
+            return _unresolved_product(product, match)
+        bound.arguments["product"] = match.name
+        reply = tool(*bound.args, **bound.kwargs)
+        return (
+            f"상품명 {product!r}을 정식 명칭 {match.name!r}로 읽었다. "
+            f"사용자가 말한 상품이 이것이 맞는지 함께 전할 것.\n{reply}"
+        )
+
+    run.resolves_product = True
+    return run
+
+
+def _unresolved_product(product: str, match: ProductMatch) -> str:
+    if not match.candidates:
+        return (
+            f"상품명 {product!r}에 맞는 약관 상품이 없다. 판정하지 않았다. "
+            "list_products로 정식 명칭을 확인해 다시 부를 것."
+        )
+    lines = [
+        f"상품명 {product!r}이 여러 상품에 맞아 하나로 정하지 못했다. 판정하지 않았다.",
+        "사용자에게 어느 상품인지 확인하고, 아래 정식 명칭 그대로 다시 부를 것:",
+    ]
+    lines.extend(f"  - {name}" for name in match.candidates)
+    return "\n".join(lines)
 
 
 _driver = None
@@ -236,6 +300,7 @@ def list_products() -> str:
 
 @mcp.tool()
 @guarded
+@canonical_product
 def resolve_terms_version(enrolled_on: str, product: str = "") -> str:
     """가입일에 적용되던 약관 버전을 찾는다. `enrolled_on`은 YYYY-MM-DD.
 
@@ -292,6 +357,7 @@ def resolve_terms_version(enrolled_on: str, product: str = "") -> str:
 
 @mcp.tool()
 @guarded
+@canonical_product
 def list_exclusions(product: str, enrolled_on: str) -> str:
     """그 상품·그 가입 시점의 면책 조항을 **전부** 반환한다.
 
@@ -327,6 +393,7 @@ def list_exclusions(product: str, enrolled_on: str) -> str:
 
 @mcp.tool()
 @guarded
+@canonical_product
 def check_diagnosis_codes(product: str, enrolled_on: str, codes: str) -> str:
     """진단코드가 면책 범위에 드는지 결정론적으로 확인한다.
 
@@ -409,6 +476,7 @@ def search_clauses(query: str, limit: int = 8) -> str:
 
 @mcp.tool()
 @guarded
+@canonical_product
 def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
     """청구 내용에 걸릴 수 있는 면책을 골라낸다. 확실/불확실을 나눠 준다.
 
@@ -454,6 +522,7 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
 
 @mcp.tool()
 @guarded
+@canonical_product
 def adjudicate_claim(
     product: str,
     enrolled_on: str,
