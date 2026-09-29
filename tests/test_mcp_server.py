@@ -225,3 +225,90 @@ def test_triage_needs_an_issue(tools) -> None:
     from clausegraph.mcp_server.server import triage_definition
 
     assert "쟁점 문장을 달라" in triage_definition("   ")
+
+
+# --- 상품명 해석 (도구 입구) ---------------------------------------------
+
+PRODUCT_TOOLS = (
+    "resolve_terms_version",
+    "list_exclusions",
+    "check_diagnosis_codes",
+    "screen_exclusions",
+    "adjudicate_claim",
+)
+
+
+def test_every_tool_taking_a_product_resolves_its_name() -> None:
+    # 한 도구라도 빠지면 그 도구만 줄인 이름에 조용히 0건을 돌려준다.
+    from clausegraph.mcp_server import server
+
+    for name in PRODUCT_TOOLS:
+        assert getattr(getattr(server, name), "resolves_product", False), name
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    """그래프 대신 쓰는 상품 목록. (전체, 스코프 안) 순서."""
+    from clausegraph.mcp_server import server
+
+    every = (
+        "실손의료보험 특별약관1(중증 비급여 실손의료비)",
+        "해외여행 실손의료보험 특별약관1(중증 비급여 실손의료비)",
+        "화재보험",
+    )
+    visible = every[:2]
+    monkeypatch.setattr(server, "_product_names", lambda: (every, visible))
+    return server
+
+
+def _echo(catalog):
+    @catalog.canonical_product
+    def tool(product: str, enrolled_on: str) -> str:
+        return f"도구가 받은 상품={product}"
+
+    return tool
+
+
+def test_shortened_product_is_replaced_and_the_reply_says_so(catalog) -> None:
+    reply = _echo(catalog)(product="실손의료보험 특별약관1(중증 비급여)", enrolled_on="2026-07-01")
+
+    assert "도구가 받은 상품=실손의료보험 특별약관1(중증 비급여 실손의료비)" in reply
+    # 바꿨다는 사실을 숨기지 않는다 — 모델이 사용자에게 확인할 수 있어야 한다.
+    assert reply.splitlines()[0].startswith("상품명 ")
+
+
+def test_ambiguous_product_does_not_reach_the_tool(catalog) -> None:
+    reply = _echo(catalog)(product="특별약관1", enrolled_on="2026-07-01")
+
+    assert "도구가 받은" not in reply
+    assert "해외여행 실손의료보험 특별약관1(중증 비급여 실손의료비)" in reply
+    assert "실손의료보험 특별약관1(중증 비급여 실손의료비)" in reply
+
+
+def test_unknown_product_points_to_list_products(catalog) -> None:
+    reply = _echo(catalog)(product="암보험", enrolled_on="2026-07-01")
+
+    assert "도구가 받은" not in reply
+    assert "list_products" in reply
+
+
+def test_out_of_scope_product_is_never_offered_as_a_candidate(catalog) -> None:
+    # 후보 목록이 스코프 밖 상품의 존재를 흘리면 list_products를 거른 의미가 없다.
+    reply = _echo(catalog)(product="화재", enrolled_on="2026-07-01")
+
+    assert "화재보험" not in reply
+
+
+def test_exact_out_of_scope_name_still_reaches_the_access_gate(catalog) -> None:
+    # 정확한 이름은 그대로 넘겨 도구 안의 권한 게이트가 '권한 없음'이라고
+    # 말하게 한다. 여기서 '그런 상품 없다'로 바꾸면 거절이 뭉개진다.
+    reply = _echo(catalog)(product="화재보험", enrolled_on="2026-07-01")
+
+    assert reply == "도구가 받은 상품=화재보험"
+
+
+def test_blank_product_is_left_to_the_tool(catalog) -> None:
+    # resolve_terms_version은 상품 없이 부를 수 있다.
+    reply = _echo(catalog)(product="", enrolled_on="2026-07-01")
+
+    assert reply == "도구가 받은 상품="
