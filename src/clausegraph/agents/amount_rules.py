@@ -112,6 +112,19 @@ class AmountRule:
     #
     # 의료기관 종류를 모르면 이 한도를 걸지 못하고, 안 거는 쪽이 과다지급이다.
     inpatient_clinic_cap: int | None = None
+    # 한도가 **약관이 아니라 보험증권에** 있는 상품. 해외여행 기본형 제5조 ①:
+    #
+    #   "(1)상해의료비 해외, (2)질병의료비 해외의 경우 각각에 대하여
+    #    **계약시 계약자가 선택한 금액**"
+    #
+    # 그래서 `annual_limit`은 비워 두고 청구가 가입금액을 들고 와야 한다.
+    # 모르면 한도를 걸지 못하고, 그때 금액은 지급액이 아니라 상한이다.
+    limit_from_policy: bool = False
+    # 해외의료기관에서 치료받은 경우에만 쓰는 규칙. 같은 상품의 국내(급여)
+    # 행은 공제·비율·한도가 전부 다르다 — 해외 규칙을 국내 치료에 쓰면
+    # 공제를 하나도 안 빼고 100%를 주는 과다지급이다. 치료 장소를 모르면
+    # 이 규칙을 고르지 않는다.
+    abroad_only: bool = False
     # 이 값들을 읽은 조항. 사람이 열어 대조할 수 있어야 한다.
     source_articles: tuple[str, ...] = ()
     note: str = ""
@@ -119,8 +132,12 @@ class AmountRule:
     def rate_for(self, inpatient: bool) -> float | None:
         return self.inpatient_rate if inpatient else self.outpatient_rate
 
+    def has_limit(self) -> bool:
+        """한도를 어디서 정하는지 아는가. 값 자체는 증권에 있을 수 있다."""
+        return self.annual_limit is not None or self.limit_from_policy
+
     def complete_for_inpatient(self) -> bool:
-        if self.inpatient_rate is None or self.annual_limit is None:
+        if self.inpatient_rate is None or not self.has_limit():
             return False
         # 입원에도 공제가 붙는 규칙이면 공제 값까지 있어야 계산이 된다.
         if not self.deductible_applies_to_inpatient:
@@ -128,16 +145,17 @@ class AmountRule:
         return None not in (self.outpatient_deductible, self.outpatient_deductible_rate)
 
     def complete_for_outpatient(self) -> bool:
-        return self.outpatient_rate is not None and None not in (
-            self.annual_limit,
-            self.outpatient_deductible,
-            self.outpatient_deductible_rate,
+        return (
+            self.outpatient_rate is not None
+            and self.has_limit()
+            and None not in (self.outpatient_deductible, self.outpatient_deductible_rate)
         )
 
 
 BENEFIT = "기본형 실손의료보험(급여 실손의료비)"
 SEVERE = "실손의료보험 특별약관1(중증 비급여 실손의료비)"
 MILD = "실손의료보험 특별약관2(비중증 비급여 실손의료비)"
+OVERSEAS = "기본형 해외여행 실손의료보험"
 
 # 2026-05-06 이후 판본에서 읽었다. 판본이 바뀌면 여기도 함께 봐야 한다.
 VERIFIED_VERSION = "20260506"
@@ -167,6 +185,17 @@ _SEVERE_ARTICLES = (_uid(SEVERE, "3"), _uid(SEVERE, "5"))
 #                 제5조 ① "합산하여 1천만원 이내", ③ "통원 1일당 20만원 이내",
 #                 제3조 <표1> "5만원과 보장대상 의료비의 50% 중 큰 금액"
 _MILD_ARTICLES = (_uid(MILD, "3"), _uid(MILD, "5"))
+
+# 해외여행 기본형의 **해외** 행 — 제3조 표 (1)·(2) 해외 ①
+#   "해외의료기관에서 의사 … 의 치료를 받은 때에는 보험가입금액을 한도로
+#    피보험자가 실제 부담한 의료비 전액을 보상합니다."
+#   -> 공제 없음, 비율 100%, 입원·통원 구분 없음.
+# 제5조 ① 한도는 "계약시 계약자가 선택한 금액" -> 증권 값(limit_from_policy).
+# 20250401·20250901·20260910 판본도 같은 문장이다(2026-10-20 원문 대조).
+#
+# 같은 상품의 국내(급여) 행(붙임 공제, 180일 90회)은 넣지 않았다. 넣으면
+# `find_rule`이 상해/질병으로 고를 때 해외·국내 둘이 걸려 아무것도 못 고른다.
+_OVERSEAS_ARTICLES = (_uid(OVERSEAS, "3"), _uid(OVERSEAS, "5"))
 
 RULES: tuple[AmountRule, ...] = (
     AmountRule(
@@ -320,6 +349,32 @@ RULES: tuple[AmountRule, ...] = (
     # 상급병실료 차액(비급여 병실료의 50%, 1일 평균 10만원 한도)과 특약2
     # 입원의 의원급 1회당 300만원 한도는 넣지 않았다. 입원일수별 평균이나
     # 1회 단위 상태가 필요한데 지금 구조에 그 값이 없다.
+    AmountRule(
+        product=OVERSEAS,
+        coverage="(1)상해의료비 해외",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=None,
+        limit_from_policy=True,
+        abroad_only=True,
+        outpatient_deductible=0,
+        outpatient_deductible_rate=0.0,
+        source_articles=_OVERSEAS_ARTICLES,
+        note="해외의료기관 치료만. 한도는 증권의 보험가입금액",
+    ),
+    AmountRule(
+        product=OVERSEAS,
+        coverage="(2)질병의료비 해외",
+        inpatient_rate=1.00,
+        outpatient_rate=1.00,
+        annual_limit=None,
+        limit_from_policy=True,
+        abroad_only=True,
+        outpatient_deductible=0,
+        outpatient_deductible_rate=0.0,
+        source_articles=_OVERSEAS_ARTICLES,
+        note="상해의료비 해외와 같은 구조. 가입금액은 보장종목별로 따로다",
+    ),
 )
 
 _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}
@@ -343,14 +398,25 @@ def find_rule(
     product: str,
     coverage: str | None = None,
     diagnosis_codes: tuple[str, ...] = (),
+    *,
+    abroad: bool | None = None,
 ) -> AmountRule | None:
-    """상품·보장종목의 파라미터. 없으면 None — 계산하지 않는다."""
+    """상품·보장종목의 파라미터. 없으면 None — 계산하지 않는다.
+
+    `abroad`는 해외의료기관에서 치료받았는지다. **True일 때만** 해외 전용
+    규칙을 고른다 — 모르는 것(None)을 해외로 치면 국내 치료에 공제 없는
+    100%를 주게 된다.
+    """
+
+    def usable(rule: AmountRule) -> bool:
+        return abroad is True or not rule.abroad_only
+
     if coverage:
         exact = _BY_KEY.get((product, coverage))
-        if exact is not None:
+        if exact is not None and usable(exact):
             return exact
 
-    candidates = [rule for rule in RULES if rule.product == product]
+    candidates = [rule for rule in RULES if rule.product == product and usable(rule)]
     if not candidates:
         return None
     if len(candidates) == 1:

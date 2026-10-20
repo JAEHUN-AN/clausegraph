@@ -194,7 +194,9 @@ def _run(
         (hit.evidence.node_uid.split("#")[1] for hit in uncertain if "#" in hit.evidence.node_uid),
         None,
     )
-    rule = find_rule(claim.product, coverage, claim.diagnosis_codes)
+    rule = find_rule(
+        claim.product, coverage, claim.diagnosis_codes, abroad=claim.treated_abroad
+    )
     computed, step = _timed(
         "금액산정",
         lambda: amount_agent.compute(
@@ -207,6 +209,7 @@ def _run(
             history=claim.history,
             room_charge=claim.room_charge,
             hospital_days=claim.hospital_days,
+            sum_insured=claim.sum_insured,
         ),
     )
     steps.append(

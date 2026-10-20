@@ -531,6 +531,10 @@ def adjudicate_claim(
     outpatient_visits_this_year: int = -1,
     self_paid_this_year: int = -1,
     room_charge: int = 0,
+    sum_insured: int = -1,
+    treated_abroad: bool | None = None,
+    diagnosis_codes: str = "",
+    claimed_amount_krw: int = -1,
 ) -> str:
     """청구 한 건을 심사해 판정과 근거, 발동한 가드레일을 반환한다.
 
@@ -559,6 +563,17 @@ def adjudicate_claim(
     별도 행이라 입원의료비와 따로 계산해 더한다. 상급병실을 쓰지 않았거나
     청구에 포함하지 않았으면 0으로 둔다 — 이건 계약 상태가 아니라 **청구의
     내용**이므로 0이 곧 "청구하지 않았다"는 뜻이고, 추측이 아니다(notes/029).
+
+    서류를 읽어 **이미 구조화한 값**이 있으면 넣는다. 서술에서 다시 추정하지
+    않으므로 판정이 서술의 낱말에 흔들리지 않는다.
+
+    - `diagnosis_codes` — 진단서의 KCD 코드, 쉼표 구분("S62.0, W54"). 주면
+      서술에서 코드를 추정하지 않는다
+    - `claimed_amount_krw` — 원화 청구액. 서술은 원 단위만 읽는다
+    - `treated_abroad` — 해외의료기관 치료인가. 해외여행 기본형의 해외 의료비
+      (공제 없이 전액)는 True일 때만 계산한다. 모르면 넣지 말 것
+    - `sum_insured` — 보험증권의 보험가입금액. 해외 의료비 한도는 약관이
+      아니라 증권에 있다. 모르면 넣지 말 것 — 지급액 대신 상한이 나온다
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
@@ -584,6 +599,10 @@ def adjudicate_claim(
         enrich=lookup,
         history=history,
         room_charge=max(0, room_charge),
+        diagnosis_codes=tuple(diagnosis_codes.split(",")) if diagnosis_codes.strip() else (),
+        claimed_amount=claimed_amount_krw if claimed_amount_krw >= 0 else None,
+        sum_insured=sum_insured if sum_insured >= 0 else None,
+        treated_abroad=treated_abroad,
     )
     result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
@@ -732,6 +751,9 @@ def _revise(
         enrich=lookup,
         history=history,
         room_charge=room_charge if room_charge >= 0 else claim.room_charge,
+        # 서술에서 오지 않는 값은 서술을 고쳐 말해도 그대로다.
+        sum_insured=claim.sum_insured,
+        treated_abroad=claim.treated_abroad,
     )
 
 

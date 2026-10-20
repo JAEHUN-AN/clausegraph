@@ -53,6 +53,20 @@ class Claim(BaseModel):
             " 입원의료비와 따로 계산한다. 0이면 상급병실료를 청구하지 않은 것이다"
         ),
     )
+    sum_insured: int | None = Field(
+        default=None,
+        description=(
+            "보험증권의 보험가입금액(원). 해외여행 기본형의 해외 의료비는 한도가"
+            " 약관이 아니라 증권에 있다. 없으면 지급액 대신 상한만 말한다"
+        ),
+    )
+    treated_abroad: bool | None = Field(
+        default=None,
+        description=(
+            "해외의료기관에서 치료받았는가. 해외 의료비 행은 공제 없이 전액을"
+            " 주므로, 모르면(None) 해외로 치지 않는다"
+        ),
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
 

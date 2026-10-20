@@ -61,16 +61,34 @@ def extract_claim(
     enrich: Enricher | None = None,
     history: ClaimHistory | None = None,
     room_charge: int = 0,
+    diagnosis_codes: tuple[str, ...] = (),
+    claimed_amount: int | None = None,
+    sum_insured: int | None = None,
+    treated_abroad: bool | None = None,
 ) -> Claim:
     """서술에서 사실을 뽑아 Claim을 만든다.
 
     `history`는 서술에서 뽑지 않는다 — 올해 기지급액과 통원 횟수는 청구인이
     적는 것이 아니라 **보험사 시스템이 아는 값**이다. 없으면 없는 대로 두고,
     계산기가 지급액 대신 상한을 말한다(notes/027).
+
+    **구조화 입력이 서술보다 앞선다.** 진단서·영수증을 읽는 앞단이 코드와
+    금액을 이미 뽑아 왔으면 서술에서 다시 추정하지 않는다.
+
+    - `diagnosis_codes`를 주면 그 코드만 쓰고 `enrich`를 부르지 않는다.
+      enrich는 상병명 부분일치라 서술의 '오른쪽'에서 C34를, '검사비만'에서
+      E66을 만든다 — 진단서에 적힌 코드가 있는데 그 추정을 섞으면 서류에
+      없는 면책 코드로 부지급이 날 수 있다.
+    - `claimed_amount`를 주면 서술의 금액을 읽지 않는다. 서술은 원 단위만
+      읽으므로 "USD 1,800"은 0원이 된다. 환산은 앞단의 일이다.
     """
-    codes = tuple(dict.fromkeys(_KCD_RE.findall(narrative)))
-    if enrich is not None:
-        codes = tuple(dict.fromkeys([*codes, *enrich(narrative)]))
+    if diagnosis_codes:
+        cleaned = (code.strip().upper() for code in diagnosis_codes)
+        codes = tuple(dict.fromkeys(code for code in cleaned if code))
+    else:
+        codes = tuple(dict.fromkeys(_KCD_RE.findall(narrative)))
+        if enrich is not None:
+            codes = tuple(dict.fromkeys([*codes, *enrich(narrative)]))
 
     return Claim(
         claim_id=claim_id,
@@ -82,7 +100,9 @@ def extract_claim(
         diagnosis_codes=codes,
         procedure=_procedure(narrative),
         hospital_days=_hospital_days(narrative),
-        claimed_amount=_amount(narrative),
+        claimed_amount=_amount(narrative) if claimed_amount is None else claimed_amount,
+        sum_insured=sum_insured,
+        treated_abroad=treated_abroad,
         narrative=narrative.strip(),
     )
 
