@@ -64,14 +64,20 @@ MIN_TAIL_KEY_LEN = 3
 # 코드는 언제나 코드표에서 찾는다. 코드를 손으로 적으면 코드표가 갱신될 때
 # 어긋나고, 그 어긋남을 아무도 모른다.
 # 아래는 전부 코드표에서 실제 표기를 확인한 것만 담았다.
-#   치아우식 -> K02, 복사의 골절 -> S82, 임신중 과다구토 -> O21, 치질 -> K64
+#   치아우식 -> K02, 복사의 골절 -> S82, 임신중 과다구토 -> O21, 치질 -> K64,
+#   비만 -> E66
 # 확인하지 못한 일상어는 넣지 않는다. 추측한 동의어는 엉뚱한 면책을 걸고,
 # 왜 걸렸는지 아무도 설명하지 못한다.
+#
+# `고도비만`은 짧은 열쇠의 앞 글자 검사(BOUNDED_KEY_MAX_LEN) 때문에 넣었다.
+# 붙여 쓴 '고도비만'의 `비만`은 앞 글자가 한글이라 맞지 않는다. 동의어로
+# 공식 표기를 띄어 덧붙이면 다시 맞는다.
 SYNONYMS: dict[str, str] = {
     "충치": "치아우식",
     "발목 골절": "복사의 골절",
     "입덧": "과다구토",
     "치핵": "치질",
+    "고도비만": "비만",
 }
 
 # 상병으로 쓰지 않는 챕터. 서술과 우연히 겹쳐 엉뚱한 코드를 물어 온다.
@@ -84,6 +90,31 @@ SYNONYMS: dict[str, str] = {
 # 버리면 `치질`(K64)·`비만`(E66)까지 잃는다. 그래서 남겨 두고, 이 잡음이
 # 어떤 면책 구간에도 들지 않는다는 것을 측정으로 확인했다(notes/013).
 EXCLUDED_CHAPTERS = frozenset("UYZ")
+
+# 병명이 아닌데 병명 끝에 붙어 tail 열쇠가 되는 낱말. 청구서에는 거의
+# 늘 나온다.
+#   `상엽, 기관지 또는 폐의 악성 신생물, 오른쪽`  ->  tail '오른쪽' = C34
+#   `벌레먹은 발바닥`(요스)                      ->  tail '발바닥' = A66
+# '오른쪽 손목 골절' 청구에 폐암 코드가 붙었다(2026-10-20 실측, notes/044).
+# 측성·부위 낱말은 병을 가리키지 않으므로 열쇠로 쓰지 않는다.
+NON_DISEASE_KEYS = frozenset({"오른쪽", "왼쪽", "양쪽", "발바닥", "손바닥"})
+
+# 병명과 일상어의 동음이의. `주사`(L71, 酒皶 — 딸기코)는 청구서에서 거의
+# 언제나 주사(注射)다. '주사를 맞았다'가 피부병 코드를 물어 왔다.
+# 딸기코는 `딸기코증`(L71.1) 전체 병명 열쇠로 여전히 찾는다.
+HOMONYM_KEYS = frozenset({"주사"})
+
+# 이 길이 이하의 열쇠는 **앞 글자가 한글이면** 맞은 것으로 치지 않는다.
+#
+# 2글자 열쇠는 앞 낱말의 끝에 걸린다. '검사비만 청구합니다'(검사비 + 만)의
+# `비만`이 E66을 물어 왔고, E66은 면책 코드라 **확실** 면책 -> 부지급으로
+# 뒤집혔다(2026-10-20, 2회 재현). '정맥주사'의 `주사`도 같은 모양이다.
+#
+# 대가가 있다. '고도비만'처럼 붙여 쓴 진짜 병명도 놓친다. 놓침은 지급 쪽으로
+# 기울고 오발동은 부지급을 만든다 — notes/013의 거래와 같은 쪽을 고른다.
+# 놓쳐도 면책 조문의 낱말 겹침이 `비만`을 불확실 면책으로 띄워 사람에게 간다.
+BOUNDED_KEY_MAX_LEN = 2
+_HANGUL_RE = re.compile(r"[가-힣]")
 
 # 병명 앞에 붙는 수식어. 떼어 내면 청구서의 말과 맞을 확률이 올라간다.
 _MODIFIER_RE = re.compile(
@@ -173,7 +204,7 @@ class KcdIndex:
         found: list[str] = []
         matched: list[str] = []
         for term in self._terms:
-            if term not in text:
+            if not _occurs(term, text):
                 continue
             # 이미 맞은 더 긴 열쇠의 부분 문자열이면 건너뛴다 —
             # `복사의 골절`이 맞았는데 `골절`까지 누적하면 M·P·S·T가 섞인다.
@@ -184,6 +215,18 @@ class KcdIndex:
                 if code not in found:
                     found.append(code)
         return tuple(found)
+
+
+def _occurs(term: str, text: str) -> bool:
+    """열쇠가 서술에 나타나는가. 짧은 열쇠는 앞 낱말에 붙은 것을 치지 않는다."""
+    if len(term) > BOUNDED_KEY_MAX_LEN:
+        return term in text
+    start = text.find(term)
+    while start != -1:
+        if start == 0 or not _HANGUL_RE.match(text[start - 1]):
+            return True
+        start = text.find(term, start + 1)
+    return False
 
 
 def load_index(csv_path: Path = DEFAULT_CSV) -> KcdIndex:
@@ -254,6 +297,9 @@ def _build_term_index(diseases: list[Disease]) -> dict[str, tuple[str, ...]]:
         if not category or category[0] in EXCLUDED_CHAPTERS:
             continue
         full_keys, tail_keys = term_keys(disease.name)
+        blocked = NON_DISEASE_KEYS | HOMONYM_KEYS
+        full_keys = [key for key in full_keys if key not in blocked]
+        tail_keys = [key for key in tail_keys if key not in blocked]
         for key in full_keys:
             if category not in full_buckets[key]:
                 full_buckets[key].append(category)

@@ -206,3 +206,44 @@ def test_real_two_character_disease_names_survive() -> None:
 
     assert index.lookup("치질 수술을 받았습니다") == ("K64",)
     assert index.lookup("비만 치료") == ("E66",)
+
+
+# --- 병명이 아닌 열쇠와 앞 낱말에 붙은 짧은 열쇠 (notes/044) ---
+
+
+def test_laterality_word_is_not_a_disease_key() -> None:
+    # 폐암 병명의 끝 낱말 '오른쪽'이 tail이 되어 '오른쪽 손목 골절'에 C34가
+    # 붙었다.
+    index = _index(("C3410", "상엽, 기관지 또는 폐의 악성 신생물, 오른쪽"))
+
+    assert index.lookup("오른쪽 손목이 부러졌습니다") == ()
+
+
+def test_body_part_word_is_not_a_disease_key() -> None:
+    index = _index(("A663", "벌레먹은 발바닥"))
+
+    assert index.lookup("발바닥이 찢어졌습니다") == ()
+    assert index.lookup("벌레먹은 발바닥 진단") == ("A66",)
+
+
+def test_injection_is_not_rosacea() -> None:
+    # 주사(L71, 酒皶)와 주사(注射)는 글자가 같다. 청구서는 거의 늘 후자다.
+    index = _index(("L71", "주사"), ("L711", "딸기코증"))
+
+    assert index.lookup("주사를 맞았습니다") == ()
+    assert index.lookup("딸기코증 치료") == ("L71",)
+
+
+def test_short_key_glued_to_the_previous_word_does_not_match() -> None:
+    # '검사비만'은 검사비 + 만이다. E66은 면책 코드라 이 오발동은 곧 부지급이다.
+    index = _index(("E66", "비만"))
+
+    assert index.lookup("검사비만 청구합니다") == ()
+    assert index.lookup("비만 치료") == ("E66",)
+    assert index.lookup("(비만) 치료") == ("E66",)
+
+
+def test_glued_real_disease_is_recovered_by_synonym() -> None:
+    index = _index(("E66", "비만"))
+
+    assert index.lookup("고도비만으로 위 절제 수술을 받았습니다") == ("E66",)
