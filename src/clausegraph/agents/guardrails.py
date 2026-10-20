@@ -62,10 +62,15 @@ def apply(
         amount = 0
 
     # 2. 금액을 코드로 계산하지 못했으면 지급액을 말하지 않는다.
+    #    **왜 계산하지 않았는지**를 사유에 남긴다. 국내 상품에 해외 치료, 섞인
+    #    보장종목처럼 일부러 계산하지 않은 경우가 "근거가 부족하다"로 뭉개지면
+    #    심사자가 무엇을 확인해야 하는지 모른다.
     if decision in (Decision.PAID, Decision.PARTIAL) and not amount_computed:
         triggered.append(AMOUNT_NOT_COMPUTED)
         decision = Decision.HUMAN_REVIEW
-        reason = "지급액을 계산할 근거가 부족하다 — 심사자 확인이 필요하다"
+        detail = adjudication.reason.replace(" — 심사자 확인이 필요하다", "").strip()
+        named = f"({detail})" if detail else ""
+        reason = f"지급액을 계산할 근거가 부족하다{named} — 심사자 확인이 필요하다"
         amount = 0
 
     # 3. 확인 못 한 면책이 남아 있는데 지급하지 않는다.

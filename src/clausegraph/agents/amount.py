@@ -72,6 +72,7 @@ def compute(
     room_charge: int = 0,
     hospital_days: int = 0,
     sum_insured: int | None = None,
+    no_rule_reason: str | None = None,
 ) -> Amount:
     """청구액과 약관 파라미터로 지급액을 계산한다.
 
@@ -88,7 +89,10 @@ def compute(
         return Amount(
             0,
             computed=False,
-            basis="이 상품·보장종목의 지급 파라미터가 없다 — 심사자 확인이 필요하다",
+            # 일부러 고르지 않은 경우(해외 치료에 국내 상품, 섞인 보장종목)는 그
+            # 이유를 적는다. "파라미터가 없다"로 뭉개면 심사자가 엉뚱한 값을 찾는다.
+            basis=no_rule_reason
+            or "이 상품·보장종목의 지급 파라미터가 없다 — 심사자 확인이 필요하다",
         )
 
     ready = (

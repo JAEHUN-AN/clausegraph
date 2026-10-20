@@ -60,7 +60,7 @@ from ..access import Principal
 from ..observability import REGISTRY
 from . import amount as amount_agent
 from . import guardrails
-from .amount_rules import find_rule
+from .amount_rules import find_rule, why_no_rule
 from .coverage import find_coverage, resolve_version
 from .exclusion import screen
 from .models import Adjudication, Claim, Decision, Evidence, StepResult
@@ -201,6 +201,9 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
             room_charge=claim.room_charge,
             hospital_days=claim.hospital_days,
             sum_insured=claim.sum_insured,
+            no_rule_reason=why_no_rule(
+                claim.product, claim.diagnosis_codes, abroad=claim.treated_abroad
+            ),
         ),
     )
     steps = [

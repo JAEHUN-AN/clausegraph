@@ -11,13 +11,19 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from datetime import date
 
 from .models import Claim, ClaimHistory
 
-# KCD-8 코드 표기: 영문 1자 + 숫자 2자 (+ 소수점 세분류)
-_KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
+# 서술 속 KCD 코드. 구조화 입력(`parse_codes`)과 같은 문법으로 읽는다.
+#
+# 처음엔 `\b([A-Z]\d{2}(?:\.\d{1,2})?)\b`였다. 숫자와 한글이 둘 다 \w라 한국어에서
+# 가장 흔한 '코드+조사'(F20으로, F32를)에서 \b가 서지 않았고, 점 없는 표기(F200)와
+# 소문자도 놓쳤다. 서류 코드가 있으면 사전 보강을 끄므로 그 놓침이 그대로 지급으로
+# 샜다(검증 OP-5). 경계는 앞뒤 영숫자로 본다.
+_KCD_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z])(\d{2})(?:\.?(\d{1,3}))?(?![0-9])")
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
 
@@ -56,8 +62,9 @@ Enricher = Callable[[str], tuple[str, ...]]
 # 세 자리 분류로 하고, 대조기(`agents.kcd`)가 두 자리까지만 읽는다.
 _CODE_TOKEN_RE = re.compile(r"([A-Z])(\d{2})(?:\.?(\d{1,4}))?")
 # 구분자는 사람과 기계가 쓰는 것을 다 받는다 — 쉼표, 공백, 세미콜론, 전각 쉼표,
-# 가운뎃점, JSON 배열의 대괄호·따옴표.
-_CODE_SPLIT_RE = re.compile(r"[\s,;，、·/|\[\]\"']+")
+# 가운뎃점(·ㆍ・‧), JSON 배열의 대괄호·따옴표.
+# NFKC가 'ㆍ'(U+318D)를 U+119E로 바꾸므로 둘 다 둔다.
+_CODE_SPLIT_RE = re.compile(r"[\s,;，、·ㆍᆞ・‧/|\[\]\"']+")
 
 
 class InvalidDiagnosisCodeError(ValueError):
@@ -69,6 +76,23 @@ class InvalidDiagnosisCodeError(ValueError):
     """
 
 
+def _normalize(text: str) -> str:
+    """전각 영숫자(Ｆ２０)·BOM·폭 없는 공백을 정리하고 대문자로."""
+    text = unicodedata.normalize("NFKC", text)
+    return text.replace("﻿", "").replace("​", "").strip().upper()
+
+
+def _code(letter: str, category: str, subdivision: str | None) -> str:
+    letter = letter.upper()
+    return f"{letter}{category}.{subdivision[:2]}" if subdivision else f"{letter}{category}"
+
+
+def codes_in(text: str) -> tuple[str, ...]:
+    """서술에 적힌 KCD 코드를 `parse_codes`와 같은 꼴로."""
+    normalized = unicodedata.normalize("NFKC", text)
+    return tuple(dict.fromkeys(_code(*match) for match in _KCD_RE.findall(normalized)))
+
+
 def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """구조화 입력의 진단코드를 `X00` 또는 `X00.d(d)` 꼴로 고른다.
 
@@ -78,7 +102,7 @@ def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     tokens = [
         token
         for item in raw
-        for token in _CODE_SPLIT_RE.split(str(item).strip().upper())
+        for token in _CODE_SPLIT_RE.split(_normalize(str(item)))
         if token
     ]
     codes: list[str] = []
@@ -88,10 +112,7 @@ def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
         if match is None:
             invalid.append(token)
             continue
-        letter, category, subdivision = match.groups()
-        codes.append(
-            f"{letter}{category}.{subdivision[:2]}" if subdivision else f"{letter}{category}"
-        )
+        codes.append(_code(*match.groups()))
     if invalid:
         raise InvalidDiagnosisCodeError(
             f"진단코드가 아닌 값: {', '.join(invalid)} — KCD 코드(예: S62.0, F200)만 넣을 것"
@@ -106,6 +127,7 @@ def extract_claim(
     narrative: str,
     *,
     enrich: Enricher | None = None,
+    weak: Enricher | None = None,
     history: ClaimHistory | None = None,
     room_charge: int = 0,
     diagnosis_codes: tuple[str, ...] = (),
@@ -134,15 +156,22 @@ def extract_claim(
     - 0 이하의 `claimed_amount`·`sum_insured`는 "주지 않았다"로 읽는다.
       가입금액 0원 계약은 없다 — OCR의 빈칸이 0으로 들어온 것일 가능성이 크고,
       그대로 쓰면 사람에게 가야 할 건이 "부분지급 0원"으로 확정된다.
+
+    **확실하지 않은 코드는 버리지 않고 `weak_codes`에 둔다.** 둘이다 — `weak`
+    훅이 찾은 붙여 쓴 짧은 병명(`kcd.index.BOUNDED_KEY_MAX_LEN`), 그리고 서류
+    코드가 있어 판정 코드로 쓰지 않은 `enrich`의 추정. 면책 범위에 들면 불확실
+    면책으로 사람에게 간다. 버리면 그 면책이 조용히 빠져 지급된다.
     """
     stated = parse_codes(diagnosis_codes) if diagnosis_codes else ()
-    written = tuple(_KCD_RE.findall(narrative))
+    written = codes_in(narrative)
+    guessed = enrich(narrative) if enrich is not None else ()
+    unsure: tuple[str, ...] = weak(narrative) if weak is not None else ()
     if stated:
         codes = tuple(dict.fromkeys([*stated, *written]))
+        unsure = (*guessed, *unsure)
     else:
-        codes = tuple(dict.fromkeys(written))
-        if enrich is not None:
-            codes = tuple(dict.fromkeys([*codes, *enrich(narrative)]))
+        codes = tuple(dict.fromkeys([*written, *guessed]))
+    weak_codes = tuple(code for code in dict.fromkeys(unsure) if code not in codes)
 
     stated_amount = claimed_amount if claimed_amount is not None and claimed_amount > 0 else None
     return Claim(
@@ -159,6 +188,7 @@ def extract_claim(
         sum_insured=sum_insured if sum_insured is not None and sum_insured > 0 else None,
         treated_abroad=treated_abroad,
         stated_codes=stated,
+        weak_codes=weak_codes,
         stated_amount=stated_amount,
         narrative=narrative.strip(),
     )

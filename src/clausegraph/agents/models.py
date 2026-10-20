@@ -75,6 +75,14 @@ class Claim(BaseModel):
             " 덮어쓰면 면책이 사라진다"
         ),
     )
+    weak_codes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "확실하지 않은 코드 — 붙여 쓴 낱말에서 나왔거나, 서류 코드가 있어 추정을"
+            " 끈 사전이 찾은 것. 면책 범위에 들면 불확실 면책(사람 확인)이 되고,"
+            " 보장종목 판별과 지급 규칙 선택에는 쓰지 않는다"
+        ),
+    )
     stated_amount: int | None = Field(
         default=None,
         description="앞단이 넘긴 원화 청구액. 재심사에서 서술을 새로 받아도 남는다",

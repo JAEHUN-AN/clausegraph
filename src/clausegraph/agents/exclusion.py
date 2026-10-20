@@ -200,6 +200,41 @@ def screen(
             )
             continue
 
+        # 확실하지 않은 코드가 면책 범위에 들면 **불확실**로 낸다. 확정 부지급도,
+        # 조용한 지급도 아니다(`Claim.weak_codes`).
+        unsure = matches(text, claim.weak_codes)
+        if unsure:
+            hits.append(
+                ExclusionHit(
+                    evidence=evidence,
+                    reason=(
+                        f"서술에서 확실하지 않게 읽힌 코드 {', '.join(unsure)}가 면책 범위에"
+                        " 든다 — 사람 확인 필요"
+                    ),
+                    certain=False,
+                    matched_codes=unsure,
+                    exceptions=_exception_evidence(candidate, claim.product),
+                )
+            )
+            continue
+
+        # 조문에 코드가 없는 면책도 **사유 자체를 말하는 코드**가 있다. X78(의도적
+        # 자해)이 서류에 있는데 '고의로 자신을 해친 경우' 면책을 못 보고 지급했다
+        # (검증 OP-3). 단서(심신상실 등)가 있어 불확실로 낸다.
+        reasoned = _reason_code_hit(text, claim.diagnosis_codes)
+        if reasoned:
+            code, label = reasoned
+            hits.append(
+                ExclusionHit(
+                    evidence=evidence,
+                    reason=f"진단코드 {code}({label})가 이 면책 사유를 가리킨다 — 사람 확인 필요",
+                    certain=False,
+                    matched_codes=(code,),
+                    exceptions=_exception_evidence(candidate, claim.product),
+                )
+            )
+            continue
+
         keyword = _distinctive_overlap(text, haystack, distinctive)
         if keyword:
             hits.append(
@@ -211,6 +246,32 @@ def screen(
                 )
             )
     return hits, len(candidates)
+
+
+# 사유 코드 — 조문에 코드 범위가 없는 면책을 가리키는 KCD 코드 구간과, 그 면책
+# 조문을 알아볼 낱말. (글자, 시작, 끝, 이름, 조문 표지들)
+REASON_CODES: tuple[tuple[str, int, int, str, tuple[str, ...]], ...] = (
+    ("X", 60, 84, "의도적 자해", ("자신을 해친",)),
+    ("Y", 36, 36, "전쟁행위", ("전쟁",)),
+    ("Z", 0, 13, "검진·검사 목적", ("건강검진",)),
+    ("Z", 23, 27, "예방접종", ("예방접종",)),
+    ("Z", 31, 31, "생식 관련 처치", ("불임",)),
+    ("Z", 41, 41, "건강 상태 외 목적의 처치(미용 등)", ("외모개선",)),
+)
+_CODE_PARTS_RE = re.compile(r"([A-Z])(\d{2})")
+
+
+def _reason_code_hit(clause: str, codes: tuple[str, ...]) -> tuple[str, str] | None:
+    """이 면책 조문이 가리키는 사유를 청구 코드가 말하는가. (코드, 사유 이름)."""
+    for code in codes:
+        match = _CODE_PARTS_RE.match(code.strip().upper())
+        if match is None:
+            continue
+        letter, number = match.group(1), int(match.group(2))
+        for want, start, end, label, markers in REASON_CODES:
+            if letter == want and start <= number <= end and any(m in clause for m in markers):
+                return code, label
+    return None
 
 
 def _exception_evidence(

@@ -385,6 +385,42 @@ _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}
 INJURY_CHAPTERS = frozenset("ST")
 
 
+# 보장종목이 섞였는지 볼 때의 질병 장. R(증상)·V~Y(외인)·Z(보건서비스)·U는
+# 뺀다 — 손목 골절 서술의 '통증'(R52)이나 개물림 외인(W54)이 질병으로 세어지면
+# 멀쩡한 상해 청구가 '섞였다'가 된다.
+DISEASE_CHAPTERS = frozenset("ABCDEFGHIJKLMNOPQ")
+
+
+def coverage_kinds(diagnosis_codes: tuple[str, ...]) -> frozenset[str]:
+    """청구 코드가 가리키는 보장종목들 — {'상해'}, {'질병'}, 둘 다, 또는 빈 집합."""
+    letters = {code.strip().upper()[:1] for code in diagnosis_codes}
+    kinds = set()
+    if letters & INJURY_CHAPTERS:
+        kinds.add("상해")
+    if letters & DISEASE_CHAPTERS:
+        kinds.add("질병")
+    return frozenset(kinds)
+
+
+def why_no_rule(
+    product: str, diagnosis_codes: tuple[str, ...], *, abroad: bool | None
+) -> str | None:
+    """규칙을 일부러 고르지 않는 경우의 이유. 해당 없으면 None.
+
+    `find_rule`이 None을 돌려주는 이유가 "파라미터가 없다"뿐이면 심사자가
+    엉뚱한 것을 찾는다. 이 둘은 파라미터가 없어서가 아니라 **계산하면 안 돼서**다.
+    """
+    rules = [rule for rule in RULES if rule.product == product]
+    if abroad is True and rules and not any(rule.abroad_only for rule in rules):
+        return "해외의료기관 치료를 국내 상품 산식으로 계산하지 않는다 — 심사자 확인이 필요하다"
+    if any(rule.limit_from_policy for rule in rules) and len(coverage_kinds(diagnosis_codes)) > 1:
+        return (
+            "상해와 질병 진단이 섞여 보장종목별 보험가입금액을 나눌 수 없다"
+            " — 보장종목별 의료비 구분이 필요하다"
+        )
+    return None
+
+
 def classify_coverage(diagnosis_codes: tuple[str, ...]) -> str | None:
     """진단코드로 상해인지 질병인지 가른다. 코드가 없으면 None."""
     if not diagnosis_codes:
@@ -405,11 +441,15 @@ def find_rule(
 
     `abroad`는 해외의료기관에서 치료받았는지다. **True일 때만** 해외 전용
     규칙을 고른다 — 모르는 것(None)을 해외로 치면 국내 치료에 공제 없는
-    100%를 주게 된다.
+    100%를 주게 된다. 거꾸로 **해외 치료에 국내 규칙도 고르지 않는다** — 급여
+    실손은 국민건강보험 요양급여를, 비급여 특약은 국내 요양기관을 전제로 한다
+    (검증 OP-7). 고르지 않는 이유는 `why_no_rule`이 말한다.
     """
+    if why_no_rule(product, diagnosis_codes, abroad=abroad) is not None:
+        return None
 
     def usable(rule: AmountRule) -> bool:
-        return abroad is True or not rule.abroad_only
+        return rule.abroad_only if abroad is True else not rule.abroad_only
 
     if coverage:
         exact = _BY_KEY.get((product, coverage))

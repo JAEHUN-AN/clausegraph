@@ -164,11 +164,10 @@ def test_abroad_only_rules_are_never_chosen_unless_abroad_is_true() -> None:
                 for abroad in (None, False):
                     rule = find_rule(product, coverage, codes, abroad=abroad)
                     assert rule is None or not rule.abroad_only, (product, coverage, codes, abroad)
-                # 해외라고 해도 국내 상품의 선택은 바뀌지 않는다.
-                if product != OVERSEAS:
-                    assert find_rule(product, coverage, codes, abroad=True) == find_rule(
-                        product, coverage, codes
-                    )
+                # 해외 치료에는 국내 규칙을 고르지 않는다 — 급여 실손은 요양급여를,
+                # 비급여 특약은 국내 요양기관을 전제로 한다(검증 OP-7).
+                abroad_rule = find_rule(product, coverage, codes, abroad=True)
+                assert abroad_rule is None or abroad_rule.abroad_only, (product, coverage, codes)
 
 
 # --- MEDIUM-4: 빠진 값의 이름 ---

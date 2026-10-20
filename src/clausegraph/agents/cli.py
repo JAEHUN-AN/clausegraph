@@ -19,7 +19,7 @@ from ..access import Principal
 from .extract import extract_claim
 from .models import Adjudication, ClaimHistory
 from .orchestrator import adjudicate
-from .terminology import lookup
+from .terminology import lookup, weak_lookup
 
 # 데모는 전 상품을 보여 준다. 권한을 재는 자리는 access_eval.py다.
 DEMO_PRINCIPAL = Principal.everything("demo")
@@ -170,6 +170,7 @@ def run(use_terminology: bool) -> int:
             claim = extract_claim(
                 claim_id, product, enrolled_on, narrative,
                 enrich=lookup if use_terminology else None,
+                weak=weak_lookup if use_terminology else None,
                 history=history,
                 room_charge=room_charge,
             )

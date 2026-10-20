@@ -39,7 +39,7 @@ from ..agents.models import Adjudication, Claim, ClaimHistory
 from ..agents.orchestrator import adjudicate
 from ..agents.quote import prose_quote
 from ..agents.session import STORE, TurnKind
-from ..agents.terminology import lookup
+from ..agents.terminology import lookup, weak_lookup
 from ..graph.schema import OPEN_ENDED
 from ..observability import REGISTRY
 from ..product_names import ProductMatch, match_product
@@ -492,7 +492,7 @@ def screen_exclusions(product: str, enrolled_on: str, narrative: str) -> str:
     if version is None:
         return f"가입일 {enrolled_on}에 {product}로 적용되던 약관을 찾지 못했다."
 
-    claim = extract_claim("MCP", product, parsed, narrative, enrich=lookup)
+    claim = extract_claim("MCP", product, parsed, narrative, enrich=lookup, weak=weak_lookup)
     hits, considered = screen(driver(), claim, version, principal=principal())
     certain = [hit for hit in hits if hit.certain]
     uncertain = [hit for hit in hits if not hit.certain]
@@ -605,6 +605,7 @@ def adjudicate_claim(
             parsed,
             narrative,
             enrich=lookup,
+            weak=weak_lookup,
             history=history,
             room_charge=max(0, room_charge),
             diagnosis_codes=(diagnosis_codes,) if diagnosis_codes.strip() else (),
@@ -733,7 +734,7 @@ def revise_claim(
     rendered = _render(result, claim.diagnosis_codes)
     STORE.save(
         session.with_turn(
-            TurnKind.REVISE, narrative or "값 갱신", rendered,
+            TurnKind.REVISE, narrative.strip() or "값 갱신", rendered,
             now=time.monotonic(), claim=claim, adjudication=result,
         )
     )
@@ -754,6 +755,10 @@ def _revise(
     treated_abroad: bool | None = None,
 ) -> Claim:
     """준 값만 갈아 끼운 새 청구. 주지 않은 값은 건드리지 않는다."""
+    # 공백·줄바꿈만 있는 서술은 아무 사실도 새로 말하지 않는다. 서술로 치면 앞
+    # 서술에서 읽은 코드·입원일수·사고일이 사라져 부지급이 지급으로 뒤집혔다
+    # (검증 OP-6).
+    narrative = narrative.strip()
     totals = (paid, visits, self_paid)
     history = claim.history
     if any(value >= 0 for value in totals):
@@ -770,7 +775,11 @@ def _revise(
     room = room_charge if room_charge >= 0 else claim.room_charge
 
     # 구조화 값 — 주면 바꾸고, 안 주면 앞의 값을 그대로 둔다.
-    stated = parse_codes((diagnosis_codes,)) if diagnosis_codes.strip() else claim.stated_codes
+    # 빈 표기("[]", ",", '""')도 "주지 않았다"다. "빈 코드로 바꿔라"로 읽으면
+    # 서류의 면책 코드가 지워져 DENIED가 PAID로 뒤집혔다(검증 OP-1). 서류
+    # 코드를 지우는 길은 두지 않는다 — 고칠 때는 새 코드를 준다.
+    parsed = parse_codes((diagnosis_codes,)) if diagnosis_codes.strip() else ()
+    stated = parsed or claim.stated_codes
     amount = claimed_amount if claimed_amount > 0 else claim.stated_amount
     insured = sum_insured if sum_insured > 0 else claim.sum_insured
     abroad = claim.treated_abroad if treated_abroad is None else treated_abroad
@@ -793,6 +802,7 @@ def _revise(
         claim.enrolled_on,
         narrative or claim.narrative,
         enrich=lookup,
+        weak=weak_lookup,
         history=history,
         room_charge=room,
         diagnosis_codes=stated,
