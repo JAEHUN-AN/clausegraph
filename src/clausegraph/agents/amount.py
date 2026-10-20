@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 from .amount_rules import AmountRule
 from .models import ClaimHistory
@@ -314,13 +315,19 @@ def _outpatient_deductible(
         elif any(name in institution for name in TERTIARY_INSTITUTIONS):
             flat = tertiary
 
-    terms = [flat, int(claimed_amount * (rule.outpatient_deductible_rate or 0))]
+    terms = [flat, _portion(claimed_amount, rule.outpatient_deductible_rate or 0)]
 
     # 본인부담률 항 — 약관에 없는 값이라 청구가 들고 와야 한다.
     if rule.outpatient_deductible_uses_copay_rate:
         if copay_rate is None:
             missing.append("건강보험 본인부담률")
         else:
-            terms.append(int(claimed_amount * copay_rate))
+            terms.append(_portion(claimed_amount, copay_rate))
 
     return max(terms), missing
+
+
+def _portion(amount: int, rate: float) -> int:
+    """금액 × 비율, 원 미만 절사. 부동소수로 곱하면 100,000 × 0.29가 28,999.999…라
+    공제가 1원 덜 빠진다(검토 PR #13). 비율을 적힌 그대로의 분수로 바꿔 곱한다."""
+    return int(Fraction(amount) * Fraction(str(rate)))

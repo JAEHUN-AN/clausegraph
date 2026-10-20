@@ -629,7 +629,8 @@ def adjudicate_claim(
             sum_insured=sum_insured if sum_insured > 0 else None,
             treated_abroad=treated_abroad,
             institution=institution,
-            copay_rate=copay_rate if copay_rate >= 0 else None,
+            # 음수만 "주지 않았다"다. NaN은 비교가 거짓이라 여기를 지나 파서가 거부한다.
+            copay_rate=None if copay_rate < 0 else copay_rate,
         )
     except InvalidClaimInputError as error:
         # 쓸 수 없는 값을 버리고 판정하면 그 값이 가린 면책·공제를 건너뛴다.
@@ -807,8 +808,9 @@ def _revise(
     amount = claimed_amount if claimed_amount > 0 else claim.stated_amount
     insured = sum_insured if sum_insured > 0 else claim.sum_insured
     abroad = claim.treated_abroad if treated_abroad is None else treated_abroad
-    venue = parse_institution(institution) if institution.strip() else claim.institution
-    copay = parse_copay_rate(copay_rate) if copay_rate >= 0 else claim.copay_rate
+    # 빈 값·기호만 있는 값은 파서가 None을 돌려준다 — "주지 않았다"이므로 앞의 값을 둔다.
+    venue = parse_institution(institution) or claim.institution
+    copay = claim.copay_rate if copay_rate < 0 else parse_copay_rate(copay_rate)
     structured_changed = (
         stated != claim.stated_codes
         or amount != claim.stated_amount

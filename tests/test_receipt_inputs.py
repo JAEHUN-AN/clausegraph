@@ -31,7 +31,10 @@ ENROLLED = date(2026, 7, 1)
     ("종합병원", "종합병원"),
     ("종합 병원", "종합병원"),
     ("상급종합병원", "상급종합병원"),
-    ("병원급", "병원"),
+    ("병원급", "병원급"),
+    ("보건지소", "보건기관"),
+    ("·", None),
+    ("[]", None),
     ("의원급·보건기관", "의원"),
     ("의원급ㆍ보건기관", "의원"),
     ("의원", "의원"),
@@ -43,7 +46,9 @@ def test_institution_is_read_into_a_known_name(raw, expected) -> None:
     assert parse_institution(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["종합", "대학병원", "hospital", "종합벙원"])
+@pytest.mark.parametrize(
+    "raw", ["종합", "대학병원", "hospital", "종합벙원", "병원", "[ ]종합병원", "[V]종합병원"]
+)
 def test_unknown_institution_is_refused_not_guessed(raw) -> None:
     # "종합벙원" 같은 오타를 병원으로 읽으면 공제 정액이 1만원이 되어 과다지급이다.
     with pytest.raises(InvalidInstitutionError):
@@ -51,14 +56,15 @@ def test_unknown_institution_is_refused_not_guessed(raw) -> None:
 
 
 @pytest.mark.parametrize(
-    "raw,expected", [(0.5, 0.5), (0.3, 0.3), (0.0, 0.0), (1.0, 1.0), (None, None), (-1, None)]
+    "raw,expected", [(0.5, 0.5), (0.3, 0.3), (1.0, 1.0), (None, None), (-1, None)]
 )
 def test_copay_rate_is_a_ratio(raw, expected) -> None:
     assert parse_copay_rate(raw) == expected
 
 
-@pytest.mark.parametrize("raw", [50, 1.5, 30.0])
-def test_percent_copay_rate_is_refused(raw) -> None:
+@pytest.mark.parametrize("raw", [50, 1.5, 30.0, 0, 0.0, float("nan"), float("inf"), True, False])
+def test_percent_zero_nan_and_bool_copay_rates_are_refused(raw) -> None:
+    # 0은 ① 본인부담금이 0이라는 뜻 — 청구액과 모순이다. 받으면 공제 셋째 항이 사라진다.
     with pytest.raises(InvalidCopayRateError):
         parse_copay_rate(raw)
 
@@ -126,3 +132,61 @@ def test_revision_with_a_bad_receipt_value_is_refused() -> None:
 
     with pytest.raises(InvalidClaimInputError):
         _revise(claim, -1, -1, -1, -1, "", copay_rate=50)
+
+
+def test_symbol_only_institution_in_a_revision_keeps_the_stored_value() -> None:
+    from clausegraph.mcp_server.server import _revise
+
+    claim = extract_claim(
+        "C", BENEFIT, ENROLLED, "통원", diagnosis_codes=("J20.9",),
+        institution="종합병원", copay_rate=0.5,
+    )
+
+    for blank in ("·", "[]", "()", "/"):
+        revised = _revise(claim, -1, -1, -1, -1, "", institution=blank)
+        assert revised.institution == "종합병원", blank
+
+
+def test_stored_institution_survives_being_parsed_again() -> None:
+    # 재심사는 저장된 값을 다시 파서에 넣는다. 정규화한 값은 다시 넣어도 같아야 한다.
+    from clausegraph.agents.extract import INSTITUTIONS
+
+    for canonical in set(INSTITUTIONS.values()):
+        assert parse_institution(canonical) == canonical
+
+
+def test_overseas_treatment_ignores_the_institution_name() -> None:
+    claim = extract_claim(
+        "C", "기본형 해외여행 실손의료보험", ENROLLED, "해외 통원",
+        diagnosis_codes=("S62.0",), treated_abroad=True, institution="Mayo Clinic",
+    )
+
+    assert claim.institution is None
+
+
+def test_rate_portion_has_no_float_error() -> None:
+    # 100,000 × 0.29 는 부동소수로 28,999.999… 이다. 공제가 1원 덜 빠지면 1원 과다지급.
+    from clausegraph.agents.amount import _portion
+
+    assert _portion(100_000, 0.29) == 29_000
+    assert _portion(100_000, 0.57) == 57_000
+    assert _portion(12_348, 0.2) == 2_469  # 원 미만은 절사
+
+
+@pytest.mark.parametrize("value", [0, 0.0, False, "0", "NaN"])
+def test_mcp_layer_refuses_zero_and_nan_copay_rates(monkeypatch, value) -> None:
+    # MCP는 인자를 pydantic으로 바꾼 뒤 부른다 — False·"0"은 0.0이 되어 들어온다.
+    import asyncio
+
+    from clausegraph.mcp_server import server
+
+    monkeypatch.setattr(server, "_product_names", lambda: ((BENEFIT,), (BENEFIT,)))
+    result = asyncio.run(server.mcp.call_tool("adjudicate_claim", {
+        "product": BENEFIT, "enrolled_on": "2026-07-01", "narrative": "통원",
+        "diagnosis_codes": "J20.9", "claimed_amount_krw": 45_000,
+        "institution": "종합병원", "copay_rate": value,
+        "paid_this_year": 0, "outpatient_visits_this_year": 0, "self_paid_this_year": 0,
+    }))
+
+    text = str(result)
+    assert "판정하지 않았다" in text and "본인부담률" in text

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Callable
@@ -128,12 +129,16 @@ def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 # 흔히 쓰는 값. 금액 계산기(`amount`)는 이 문자열로 급여 통원 공제의 정액(1만원/2만원)과
 # 특약2 의원급 입원 한도를 가른다 — "종합 병원"처럼 한 칸 띄운 오타가 작은 공제를 골라
 # 과다지급이 되므로, 아는 값만 받고 나머지는 되돌려 보낸다.
+#
+# 맨 "병원"은 받지 않는다. 의료법의 '병원급 의료기관'은 종합병원을 포함하고, 일상어의
+# "병원"도 흔히 종합병원을 가리킨다 — 그것을 1만원 정액으로 확정하면 과다지급이다(검토
+# PR #13). 영수증 체크칸의 표기 `병원급`(종합병원 칸이 따로 있다)만 받는다.
+# 정규화한 값도 다시 넣으면 같은 값이 나와야 한다 — 재심사가 저장된 값을 다시 넘긴다.
 INSTITUTIONS: dict[str, str] = {
     "상급종합병원": "상급종합병원",
     "종합병원": "종합병원",
     "전문요양기관": "전문요양기관",
-    "병원": "병원",
-    "병원급": "병원",
+    "병원급": "병원급",
     "요양병원": "요양병원",
     "정신병원": "정신병원",
     "치과병원": "치과병원",
@@ -145,6 +150,9 @@ INSTITUTIONS: dict[str, str] = {
     "한의원": "한의원",
     "보건기관": "보건기관",
     "보건소": "보건기관",
+    "보건지소": "보건기관",
+    "보건진료소": "보건기관",
+    "보건의료원": "보건기관",
 }
 
 
@@ -157,9 +165,13 @@ class InvalidCopayRateError(InvalidClaimInputError):
 
 
 def parse_institution(raw: str) -> str | None:
-    """영수증의 요양기관 종류를 아는 이름으로. 빈 값은 None(주지 않았다)."""
-    key = re.sub(r"[\s·ㆍᆞ・‧/()\[\]]+", "", unicodedata.normalize("NFKC", raw))
-    if not key:
+    """영수증의 요양기관 종류를 아는 이름으로. 빈 값은 None(주지 않았다).
+
+    괄호·대괄호는 지우지 않는다. 지우면 체크하지 않은 칸 `[ ]종합병원`이 종합병원으로
+    읽힌다. 기호만 있는 값(`·`, `[]`)은 빈 값과 같다 — "주지 않았다"다.
+    """
+    key = re.sub(r"[\s·ㆍᆞ・‧]+", "", unicodedata.normalize("NFKC", raw))
+    if not key or re.fullmatch(r"[\[\]()/|\"'.,;-]+", key):
         return None
     if key not in INSTITUTIONS:
         raise InvalidInstitutionError(
@@ -170,13 +182,29 @@ def parse_institution(raw: str) -> str | None:
 
 
 def parse_copay_rate(raw: float | None) -> float | None:
-    """건강보험 본인부담률(0~1). None이나 음수는 주지 않았다.
+    """건강보험 본인부담률(0 초과 1 이하). None이나 음수는 주지 않았다.
 
     영수증에서는 **① 본인부담금 ÷ (① + ② 공단부담금)**으로 구한다. 50처럼 백분율로
     넣으면 비율로 고쳐 주지 않고 되돌려 보낸다 — 0.5와 50을 추측으로 가르면 한 번은 틀린다.
+
+    **0도 되돌려 보낸다.** 0이면 ①이 0이라는 뜻인데, 급여 통원의 보상 대상이 바로 그
+    ①이다 — 청구액이 있는데 본인부담률이 0인 입력은 모순이고, OCR 빈칸이나 기본값
+    채우기일 가능성이 크다. 받으면 공제의 세 번째 항이 사라져 상한 표시 없이 확정
+    지급액이 나간다(검토 PR #13: 상급종합병원 10만원 청구에서 4만원 과다지급).
+    NaN·무한대·참거짓도 되돌려 보낸다.
     """
-    if raw is None or raw < 0:
+    if isinstance(raw, bool):
+        raise InvalidCopayRateError(f"본인부담률에 참거짓을 넣었다: {raw!r}")
+    if raw is None:
         return None
+    if not math.isfinite(raw):
+        raise InvalidCopayRateError(f"본인부담률이 숫자가 아니다: {raw!r}")
+    if raw < 0:
+        return None
+    if raw == 0:
+        raise InvalidCopayRateError(
+            "본인부담률 0은 청구액과 모순이다(① 본인부담금이 0) — 영수증 ①을 확인할 것"
+        )
     if raw > 1:
         raise InvalidCopayRateError(
             f"본인부담률은 0~1 비율로 넣을 것(50%는 0.5): {raw!r}"
@@ -256,7 +284,11 @@ def extract_claim(
         claimed_amount=_amount(narrative) if stated_amount is None else stated_amount,
         sum_insured=sum_insured if sum_insured is not None and sum_insured > 0 else None,
         treated_abroad=treated_abroad,
-        institution=parse_institution(institution) if institution else None,
+        # 해외 치료에는 요양기관 종류가 공제에 쓰이지 않는다. 해외 병원명을 국내
+        # 어휘로 읽으려다 판정 전체를 거부하지 않는다.
+        institution=(
+            parse_institution(institution) if institution and treated_abroad is not True else None
+        ),
         copay_rate=parse_copay_rate(copay_rate),
         stated_codes=stated,
         weak_codes=weak_codes,
