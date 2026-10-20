@@ -67,7 +67,11 @@ _CODE_TOKEN_RE = re.compile(r"([A-Z])(\d{2})(?:\.?(\d{1,4}))?")
 _CODE_SPLIT_RE = re.compile(r"[\s,;，、·ㆍᆞ・‧/|\[\]\"']+")
 
 
-class InvalidDiagnosisCodeError(ValueError):
+class InvalidClaimInputError(ValueError):
+    """구조화 입력이 판정에 쓸 수 없는 값이다. 판정하지 않고 되돌려 보낸다."""
+
+
+class InvalidDiagnosisCodeError(InvalidClaimInputError):
     """구조화 입력에 진단코드가 아닌 값이 섞였다.
 
     조용히 버리면 안 된다. 버린 토큰이 면책 코드였다면 그 면책을 건너뛰고
@@ -120,6 +124,66 @@ def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(codes))
 
 
+# 진료비 영수증(요양급여규칙 별지 제6호서식)의 요양기관 종류 체크칸과, 기관 이름으로
+# 흔히 쓰는 값. 금액 계산기(`amount`)는 이 문자열로 급여 통원 공제의 정액(1만원/2만원)과
+# 특약2 의원급 입원 한도를 가른다 — "종합 병원"처럼 한 칸 띄운 오타가 작은 공제를 골라
+# 과다지급이 되므로, 아는 값만 받고 나머지는 되돌려 보낸다.
+INSTITUTIONS: dict[str, str] = {
+    "상급종합병원": "상급종합병원",
+    "종합병원": "종합병원",
+    "전문요양기관": "전문요양기관",
+    "병원": "병원",
+    "병원급": "병원",
+    "요양병원": "요양병원",
+    "정신병원": "정신병원",
+    "치과병원": "치과병원",
+    "한방병원": "한방병원",
+    "의원": "의원",
+    "의원급": "의원",
+    "의원급보건기관": "의원",
+    "치과의원": "치과의원",
+    "한의원": "한의원",
+    "보건기관": "보건기관",
+    "보건소": "보건기관",
+}
+
+
+class InvalidInstitutionError(InvalidClaimInputError):
+    """요양기관 종류로 읽을 수 없는 값."""
+
+
+class InvalidCopayRateError(InvalidClaimInputError):
+    """건강보험 본인부담률로 쓸 수 없는 값."""
+
+
+def parse_institution(raw: str) -> str | None:
+    """영수증의 요양기관 종류를 아는 이름으로. 빈 값은 None(주지 않았다)."""
+    key = re.sub(r"[\s·ㆍᆞ・‧/()\[\]]+", "", unicodedata.normalize("NFKC", raw))
+    if not key:
+        return None
+    if key not in INSTITUTIONS:
+        raise InvalidInstitutionError(
+            f"요양기관 종류로 읽을 수 없다: {raw!r} — "
+            f"{', '.join(sorted(set(INSTITUTIONS.values())))} 중 하나로 넣을 것"
+        )
+    return INSTITUTIONS[key]
+
+
+def parse_copay_rate(raw: float | None) -> float | None:
+    """건강보험 본인부담률(0~1). None이나 음수는 주지 않았다.
+
+    영수증에서는 **① 본인부담금 ÷ (① + ② 공단부담금)**으로 구한다. 50처럼 백분율로
+    넣으면 비율로 고쳐 주지 않고 되돌려 보낸다 — 0.5와 50을 추측으로 가르면 한 번은 틀린다.
+    """
+    if raw is None or raw < 0:
+        return None
+    if raw > 1:
+        raise InvalidCopayRateError(
+            f"본인부담률은 0~1 비율로 넣을 것(50%는 0.5): {raw!r}"
+        )
+    return float(raw)
+
+
 def extract_claim(
     claim_id: str,
     product: str,
@@ -134,6 +198,8 @@ def extract_claim(
     claimed_amount: int | None = None,
     sum_insured: int | None = None,
     treated_abroad: bool | None = None,
+    institution: str | None = None,
+    copay_rate: float | None = None,
 ) -> Claim:
     """서술에서 사실을 뽑아 Claim을 만든다.
 
@@ -153,6 +219,9 @@ def extract_claim(
       판정하지 않고 `InvalidDiagnosisCodeError`를 낸다.
     - `claimed_amount`를 주면 서술의 금액을 읽지 않는다. 서술은 원 단위만
       읽으므로 "USD 1,800"은 0원이 된다. 환산은 앞단의 일이다.
+    - `institution`·`copay_rate`는 진료비 영수증에서 온다(요양기관 종류 체크칸,
+      ①÷(①+②)). 급여 통원 공제의 정액과 세 번째 항이 여기서 갈린다. 엄격하게
+      읽는다(`parse_institution`, `parse_copay_rate`).
     - 0 이하의 `claimed_amount`·`sum_insured`는 "주지 않았다"로 읽는다.
       가입금액 0원 계약은 없다 — OCR의 빈칸이 0으로 들어온 것일 가능성이 크고,
       그대로 쓰면 사람에게 가야 할 건이 "부분지급 0원"으로 확정된다.
@@ -187,6 +256,8 @@ def extract_claim(
         claimed_amount=_amount(narrative) if stated_amount is None else stated_amount,
         sum_insured=sum_insured if sum_insured is not None and sum_insured > 0 else None,
         treated_abroad=treated_abroad,
+        institution=parse_institution(institution) if institution else None,
+        copay_rate=parse_copay_rate(copay_rate),
         stated_codes=stated,
         weak_codes=weak_codes,
         stated_amount=stated_amount,

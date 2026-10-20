@@ -32,7 +32,13 @@ from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.definition_terms import TermIndex, terms_from_articles
 from ..agents.definition_triage import triage
 from ..agents.exclusion import enumerate_exclusions, screen
-from ..agents.extract import InvalidDiagnosisCodeError, extract_claim, parse_codes
+from ..agents.extract import (
+    InvalidClaimInputError,
+    extract_claim,
+    parse_codes,
+    parse_copay_rate,
+    parse_institution,
+)
 from ..agents.followup import answer
 from ..agents.kcd import matches
 from ..agents.models import Adjudication, Claim, ClaimHistory
@@ -535,6 +541,8 @@ def adjudicate_claim(
     treated_abroad: bool | None = None,
     diagnosis_codes: str = "",
     claimed_amount_krw: int = -1,
+    institution: str = "",
+    copay_rate: float = -1,
 ) -> str:
     """청구 한 건을 심사해 판정과 근거, 발동한 가드레일을 반환한다.
 
@@ -580,7 +588,14 @@ def adjudicate_claim(
     해외 의료비에서는 `paid_this_year`를 **이 계약 전체의** 기지급액으로 읽는다
     — 한도가 연간이 아니라 계약의 보험가입금액이기 때문이다.
 
-    진단코드에 코드가 아닌 값이 섞이면 판정하지 않고 되돌려 보낸다.
+    국내 진료비 영수증(요양급여규칙 별지 제6호서식)에서 오는 두 값 — 급여 통원
+    공제가 여기서 갈린다. 없으면 공제를 끝까지 계산하지 못해 지급액 대신 상한이 나온다.
+
+    - `institution` — 요양기관 종류 체크칸(상급종합병원·종합병원·병원급·의원급 등)
+    - `copay_rate` — 건강보험 본인부담률, 0~1 비율. **① 본인부담금 ÷ (① + ② 공단부담금)**.
+      50%는 0.5다
+
+    진단코드·요양기관 종류·본인부담률에 쓸 수 없는 값이 섞이면 판정하지 않고 되돌려 보낸다.
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
@@ -613,9 +628,11 @@ def adjudicate_claim(
             claimed_amount=claimed_amount_krw if claimed_amount_krw > 0 else None,
             sum_insured=sum_insured if sum_insured > 0 else None,
             treated_abroad=treated_abroad,
+            institution=institution,
+            copay_rate=copay_rate if copay_rate >= 0 else None,
         )
-    except InvalidDiagnosisCodeError as error:
-        # 코드가 아닌 토큰을 버리고 판정하면 그 토큰이 가린 면책을 건너뛴다.
+    except InvalidClaimInputError as error:
+        # 쓸 수 없는 값을 버리고 판정하면 그 값이 가린 면책·공제를 건너뛴다.
         return f"판정하지 않았다 — {error}"
     result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
@@ -695,6 +712,8 @@ def revise_claim(
     claimed_amount_krw: int = -1,
     sum_insured: int = -1,
     treated_abroad: bool | None = None,
+    institution: str = "",
+    copay_rate: float = -1,
 ) -> str:
     """새 사실을 넣어 **같은 건을 다시 심사한다.** 앞 판정과의 차이를 낸다.
 
@@ -709,7 +728,8 @@ def revise_claim(
     **서류에서 온 값은 서술로 덮어쓰지 않는다.** 처음에 `diagnosis_codes`·
     `claimed_amount_krw`로 넘긴 값은 서술을 새로 줘도 남는다 — 청구인이 다시
     쓴 문장에서 진단서의 면책 코드가 빠지면 부지급이 지급으로 뒤집힌다. 그 값을
-    고치려면 같은 이름의 인자로 직접 준다. `sum_insured`·`treated_abroad`도 같다.
+    고치려면 같은 이름의 인자로 직접 준다. `sum_insured`·`treated_abroad`·
+    `institution`·`copay_rate`(영수증에서 온 값)도 같다.
 
     판정은 갈아 끼우지 않고 **판(revision)을 올린다.** 어느 판을 근거로
     답했는지 되짚을 수 있어야 하기 때문이다.
@@ -727,8 +747,10 @@ def revise_claim(
             claimed_amount=claimed_amount_krw,
             sum_insured=sum_insured,
             treated_abroad=treated_abroad,
+            institution=institution,
+            copay_rate=copay_rate,
         )
-    except InvalidDiagnosisCodeError as error:
+    except InvalidClaimInputError as error:
         return f"다시 심사하지 않았다 — {error}"
     result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
@@ -753,6 +775,8 @@ def _revise(
     claimed_amount: int = -1,
     sum_insured: int = -1,
     treated_abroad: bool | None = None,
+    institution: str = "",
+    copay_rate: float = -1,
 ) -> Claim:
     """준 값만 갈아 끼운 새 청구. 주지 않은 값은 건드리지 않는다."""
     # 공백·줄바꿈만 있는 서술은 아무 사실도 새로 말하지 않는다. 서술로 치면 앞
@@ -783,11 +807,15 @@ def _revise(
     amount = claimed_amount if claimed_amount > 0 else claim.stated_amount
     insured = sum_insured if sum_insured > 0 else claim.sum_insured
     abroad = claim.treated_abroad if treated_abroad is None else treated_abroad
+    venue = parse_institution(institution) if institution.strip() else claim.institution
+    copay = parse_copay_rate(copay_rate) if copay_rate >= 0 else claim.copay_rate
     structured_changed = (
         stated != claim.stated_codes
         or amount != claim.stated_amount
         or insured != claim.sum_insured
         or abroad != claim.treated_abroad
+        or venue != claim.institution
+        or copay != claim.copay_rate
     )
 
     if not narrative and not structured_changed:
@@ -809,6 +837,8 @@ def _revise(
         claimed_amount=amount,
         sum_insured=insured,
         treated_abroad=abroad,
+        institution=venue,
+        copay_rate=copay,
     )
 
 
