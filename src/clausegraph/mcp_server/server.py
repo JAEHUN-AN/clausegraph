@@ -32,7 +32,7 @@ from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.definition_terms import TermIndex, terms_from_articles
 from ..agents.definition_triage import triage
 from ..agents.exclusion import enumerate_exclusions, screen
-from ..agents.extract import extract_claim
+from ..agents.extract import InvalidDiagnosisCodeError, extract_claim, parse_codes
 from ..agents.followup import answer
 from ..agents.kcd import matches
 from ..agents.models import Adjudication, Claim, ClaimHistory
@@ -572,8 +572,15 @@ def adjudicate_claim(
     - `claimed_amount_krw` — 원화 청구액. 서술은 원 단위만 읽는다
     - `treated_abroad` — 해외의료기관 치료인가. 해외여행 기본형의 해외 의료비
       (공제 없이 전액)는 True일 때만 계산한다. 모르면 넣지 말 것
-    - `sum_insured` — 보험증권의 보험가입금액. 해외 의료비 한도는 약관이
-      아니라 증권에 있다. 모르면 넣지 말 것 — 지급액 대신 상한이 나온다
+    - `sum_insured` — 보험증권의 보험가입금액(원). 해외 의료비 한도는 약관이
+      아니라 증권에 있다. 상해의료비 해외·질병의료비 해외의 가입금액이 따로이므로
+      **이 청구의 보장종목**(상해 — 진단코드 S·T, 그 밖은 질병) 쪽 값을 넣는다.
+      모르면 넣지 말 것 — 지급액 대신 상한이 나온다
+
+    해외 의료비에서는 `paid_this_year`를 **이 계약 전체의** 기지급액으로 읽는다
+    — 한도가 연간이 아니라 계약의 보험가입금액이기 때문이다.
+
+    진단코드에 코드가 아닌 값이 섞이면 판정하지 않고 되돌려 보낸다.
     """
     parsed = _parse_date(enrolled_on)
     if parsed is None:
@@ -591,19 +598,24 @@ def adjudicate_claim(
             self_paid_this_year=max(0, self_paid_this_year),
         )
     )
-    claim = extract_claim(
-        "MCP",
-        product,
-        parsed,
-        narrative,
-        enrich=lookup,
-        history=history,
-        room_charge=max(0, room_charge),
-        diagnosis_codes=tuple(diagnosis_codes.split(",")) if diagnosis_codes.strip() else (),
-        claimed_amount=claimed_amount_krw if claimed_amount_krw >= 0 else None,
-        sum_insured=sum_insured if sum_insured >= 0 else None,
-        treated_abroad=treated_abroad,
-    )
+    try:
+        claim = extract_claim(
+            "MCP",
+            product,
+            parsed,
+            narrative,
+            enrich=lookup,
+            history=history,
+            room_charge=max(0, room_charge),
+            diagnosis_codes=(diagnosis_codes,) if diagnosis_codes.strip() else (),
+            # 0 이하는 "주지 않았다"다. 가입금액 0원 계약은 없다.
+            claimed_amount=claimed_amount_krw if claimed_amount_krw > 0 else None,
+            sum_insured=sum_insured if sum_insured > 0 else None,
+            treated_abroad=treated_abroad,
+        )
+    except InvalidDiagnosisCodeError as error:
+        # 코드가 아닌 토큰을 버리고 판정하면 그 토큰이 가린 면책을 건너뛴다.
+        return f"판정하지 않았다 — {error}"
     result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
     session = STORE.open(claim, result, rendered)
@@ -678,6 +690,10 @@ def revise_claim(
     self_paid_this_year: int = -1,
     room_charge: int = -1,
     narrative: str = "",
+    diagnosis_codes: str = "",
+    claimed_amount_krw: int = -1,
+    sum_insured: int = -1,
+    treated_abroad: bool | None = None,
 ) -> str:
     """새 사실을 넣어 **같은 건을 다시 심사한다.** 앞 판정과의 차이를 낸다.
 
@@ -689,6 +705,11 @@ def revise_claim(
     "올해 아무것도 없다"는 뜻이라 서로 다른 말이다. `narrative`를 주면
     사실추출을 다시 돌려 진단코드·일수·금액을 새로 뽑는다.
 
+    **서류에서 온 값은 서술로 덮어쓰지 않는다.** 처음에 `diagnosis_codes`·
+    `claimed_amount_krw`로 넘긴 값은 서술을 새로 줘도 남는다 — 청구인이 다시
+    쓴 문장에서 진단서의 면책 코드가 빠지면 부지급이 지급으로 뒤집힌다. 그 값을
+    고치려면 같은 이름의 인자로 직접 준다. `sum_insured`·`treated_abroad`도 같다.
+
     판정은 갈아 끼우지 않고 **판(revision)을 올린다.** 어느 판을 근거로
     답했는지 되짚을 수 있어야 하기 때문이다.
     """
@@ -697,8 +718,17 @@ def revise_claim(
         return f"그 대화를 찾지 못했다 ({session_id}). `adjudicate_claim`부터 다시 할 것."
 
     before = session.adjudication
-    claim = _revise(session.claim, paid_this_year, outpatient_visits_this_year,
-                    self_paid_this_year, room_charge, narrative)
+    try:
+        claim = _revise(
+            session.claim, paid_this_year, outpatient_visits_this_year,
+            self_paid_this_year, room_charge, narrative,
+            diagnosis_codes=diagnosis_codes,
+            claimed_amount=claimed_amount_krw,
+            sum_insured=sum_insured,
+            treated_abroad=treated_abroad,
+        )
+    except InvalidDiagnosisCodeError as error:
+        return f"다시 심사하지 않았다 — {error}"
     result = adjudicate(driver(), claim, principal=principal())
     rendered = _render(result, claim.diagnosis_codes)
     STORE.save(
@@ -717,6 +747,11 @@ def _revise(
     self_paid: int,
     room_charge: int,
     narrative: str,
+    *,
+    diagnosis_codes: str = "",
+    claimed_amount: int = -1,
+    sum_insured: int = -1,
+    treated_abroad: bool | None = None,
 ) -> Claim:
     """준 값만 갈아 끼운 새 청구. 주지 않은 값은 건드리지 않는다."""
     totals = (paid, visits, self_paid)
@@ -732,28 +767,38 @@ def _revise(
                 self_paid if self_paid >= 0 else base.self_paid_this_year
             ),
         )
+    room = room_charge if room_charge >= 0 else claim.room_charge
 
-    if not narrative:
-        return claim.model_copy(
-            update={
-                "history": history,
-                "room_charge": room_charge if room_charge >= 0 else claim.room_charge,
-            }
-        )
+    # 구조화 값 — 주면 바꾸고, 안 주면 앞의 값을 그대로 둔다.
+    stated = parse_codes((diagnosis_codes,)) if diagnosis_codes.strip() else claim.stated_codes
+    amount = claimed_amount if claimed_amount > 0 else claim.stated_amount
+    insured = sum_insured if sum_insured > 0 else claim.sum_insured
+    abroad = claim.treated_abroad if treated_abroad is None else treated_abroad
+    structured_changed = (
+        stated != claim.stated_codes
+        or amount != claim.stated_amount
+        or insured != claim.sum_insured
+        or abroad != claim.treated_abroad
+    )
 
-    # 서술이 새로 오면 사실추출을 다시 돌린다. 앞의 코드에 덧붙이지 않는다 —
-    # 청구인이 고쳐 말한 것이면 옛 값이 남으면 안 된다.
+    if not narrative and not structured_changed:
+        return claim.model_copy(update={"history": history, "room_charge": room})
+
+    # 다시 추출한다. 서술이 새로 오면 서술에서 읽은 값은 새것으로 바꾼다 —
+    # 청구인이 고쳐 말한 것이면 옛 값이 남으면 안 된다. 그러나 **서류에서 온
+    # 값(stated_*)은 서술에서 오지 않으므로** 서술을 고쳐 말해도 남는다.
     return extract_claim(
         claim.claim_id,
         claim.product,
         claim.enrolled_on,
-        narrative,
+        narrative or claim.narrative,
         enrich=lookup,
         history=history,
-        room_charge=room_charge if room_charge >= 0 else claim.room_charge,
-        # 서술에서 오지 않는 값은 서술을 고쳐 말해도 그대로다.
-        sum_insured=claim.sum_insured,
-        treated_abroad=claim.treated_abroad,
+        room_charge=room,
+        diagnosis_codes=stated,
+        claimed_amount=amount,
+        sum_insured=insured,
+        treated_abroad=abroad,
     )
 
 

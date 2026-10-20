@@ -49,6 +49,7 @@ class _Draft:
     amount: int = 0
     amount_is_upper_bound: bool = False
     amount_is_lower_bound: bool = False
+    amount_missing: tuple[str, ...] = ()
 
 
 def adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudication:
@@ -103,6 +104,7 @@ def _adjudicate(driver: Driver, claim: Claim, *, principal: Principal) -> Adjudi
         masked=masked, amount=draft.amount,
         amount_is_upper_bound=draft.amount_is_upper_bound,
         amount_is_lower_bound=draft.amount_is_lower_bound,
+        amount_missing=draft.amount_missing,
     )
 
 
@@ -216,7 +218,8 @@ def _run(
         step(
             ok=computed.computed,
             summary=computed.basis,
-            detail={"rule": f"{claim.product}/{coverage or '미지정'}"},
+            # 진단코드로 고른 규칙이면 `coverage`는 비어 있다 — 실제로 쓴 규칙을 적는다.
+            detail={"rule": f"{claim.product}/{rule.coverage if rule else coverage or '미지정'}"},
         )
     )
 
@@ -236,6 +239,7 @@ def _run(
         amount=computed.value,
         amount_is_upper_bound=computed.is_upper_bound,
         amount_is_lower_bound=computed.is_lower_bound,
+        amount_missing=computed.missing,
     )
 
 
@@ -253,6 +257,7 @@ def _finalize(
     amount: int = 0,
     amount_is_upper_bound: bool = False,
     amount_is_lower_bound: bool = False,
+    amount_missing: tuple[str, ...] = (),
 ) -> Adjudication:
     started = time.perf_counter()
     draft = Adjudication(
@@ -271,6 +276,7 @@ def _finalize(
         has_uncertain_exclusion=uncertain,
         amount_is_upper_bound=amount_is_upper_bound,
         amount_is_lower_bound=amount_is_lower_bound,
+        missing=amount_missing,
     )
     verdict = StepResult(
         step="검증/심판",

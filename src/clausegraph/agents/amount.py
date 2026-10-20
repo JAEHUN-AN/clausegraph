@@ -224,7 +224,9 @@ def compute(
     paid_label = "이 계약 기지급액" if from_policy else "올해 기지급액"
     limit = rule.annual_limit
     if from_policy:
-        if sum_insured is None:
+        # 0 이하는 모르는 값이다 — 가입금액 0원 계약은 없다. 0으로 한도를 걸면
+        # 사람에게 가야 할 건이 "부분지급 0원"으로 확정된다.
+        if sum_insured is None or sum_insured <= 0:
             missing.append("보험가입금액(증권)")
         else:
             limit = sum_insured

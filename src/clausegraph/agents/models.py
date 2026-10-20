@@ -67,6 +67,18 @@ class Claim(BaseModel):
             " 주므로, 모르면(None) 해외로 치지 않는다"
         ),
     )
+    stated_codes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "서류를 읽는 앞단이 구조화해 넘긴 진단코드. 재심사에서 서술을 새로"
+            " 받아도 이 값은 남는다 — 청구인이 다시 쓴 문장이 진단서의 코드를"
+            " 덮어쓰면 면책이 사라진다"
+        ),
+    )
+    stated_amount: int | None = Field(
+        default=None,
+        description="앞단이 넘긴 원화 청구액. 재심사에서 서술을 새로 받아도 남는다",
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
 

@@ -243,7 +243,9 @@ def test_short_key_glued_to_the_previous_word_does_not_match() -> None:
     assert index.lookup("(비만) 치료") == ("E66",)
 
 
-def test_glued_real_disease_is_recovered_by_synonym() -> None:
+def test_glued_real_disease_is_recovered_by_modifier_prefix() -> None:
+    # 처음엔 동의어(고도비만 -> 비만)로 되살렸다. 수식어 목록이 그 일을 맡는다
+    # (tests/test_kcd_prefix.py).
     index = _index(("E66", "비만"))
 
     assert index.lookup("고도비만으로 위 절제 수술을 받았습니다") == ("E66",)

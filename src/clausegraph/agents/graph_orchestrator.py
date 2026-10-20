@@ -182,7 +182,12 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
         ),
         None,
     )
-    rule = find_rule(claim.product, coverage_name, claim.diagnosis_codes)
+    # 자체 구현(`orchestrator._run`)과 같은 인자를 넘긴다. 하나라도 빠지면 두
+    # 구현이 다른 답을 내고, compare.py의 "다르면 오케스트레이션 차이"라는 전제가
+    # 깨진다(검토 MEDIUM-2).
+    rule = find_rule(
+        claim.product, coverage_name, claim.diagnosis_codes, abroad=claim.treated_abroad
+    )
     computed, step = _timed(
         "금액산정",
         lambda: amount_agent.compute(
@@ -195,6 +200,7 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
             history=claim.history,
             room_charge=claim.room_charge,
             hospital_days=claim.hospital_days,
+            sum_insured=claim.sum_insured,
         ),
     )
     steps = [
@@ -202,7 +208,9 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
         step(
             ok=computed.computed,
             summary=computed.basis,
-            detail={"rule": f"{claim.product}/{coverage_name or '미지정'}"},
+            detail={
+                "rule": f"{claim.product}/{rule.coverage if rule else coverage_name or '미지정'}"
+            },
         ),
     ]
     decision = (
@@ -224,6 +232,7 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
             "amount": computed.value,
             "amount_is_upper_bound": computed.is_upper_bound,
             "amount_is_lower_bound": computed.is_lower_bound,
+            "amount_missing": computed.missing,
         },
     }
 
@@ -303,6 +312,7 @@ def _verdict(state: AdjudicationState) -> AdjudicationState:
             amount=draft.get("amount", 0),
             amount_is_upper_bound=draft.get("amount_is_upper_bound", False),
             amount_is_lower_bound=draft.get("amount_is_lower_bound", False),
+            amount_missing=draft.get("amount_missing", ()),
         )
     }
 

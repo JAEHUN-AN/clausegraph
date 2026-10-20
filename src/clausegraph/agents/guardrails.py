@@ -46,6 +46,7 @@ def apply(
     has_uncertain_exclusion: bool,
     amount_is_upper_bound: bool = False,
     amount_is_lower_bound: bool = False,
+    missing: tuple[str, ...] = (),
 ) -> Adjudication:
     """판정에 가드레일을 건다. 통과하지 못하면 강등한다."""
     triggered = list(adjudication.guardrails)
@@ -78,16 +79,15 @@ def apply(
 
     # 4. 공제·기지급액·보험가입금액 중 하나라도 확인하지 못했으면 그 금액은
     #    지급액이 아니라 상한이다. 상한을 지급액으로 내주면 과다지급이 된다.
-    #    계산이 "됐다"고 해도 값이 빠졌다면 여기서 막는다. 무엇이 빠졌는지는
-    #    금액산정 스텝이 적는다 — 사유에 "공제"라고 못박으면 가입금액이
-    #    없어서 멈춘 해외 청구에서 심사자가 엉뚱한 값을 찾는다.
+    #    계산이 "됐다"고 해도 값이 빠졌다면 여기서 막는다. 사유에 **빠진 값의
+    #    이름**을 적는다 — 사유에 "공제"라고 못박으면 가입금액이 없어서 멈춘
+    #    해외 청구에서 심사자가 엉뚱한 값을 찾고, 스텝을 보여 주지 않는
+    #    `follow_up`에서는 무엇이 빠졌는지 아예 안 보인다.
     if decision in (Decision.PAID, Decision.PARTIAL) and amount_is_upper_bound:
         triggered.append(AMOUNT_UPPER_BOUND)
         decision = Decision.HUMAN_REVIEW
-        reason = (
-            "계산에 필요한 값을 확인하지 못했다 — 계산된 금액은 상한이다"
-            "(빠진 값은 금액산정 스텝 참조)"
-        )
+        named = f"({', '.join(missing)})" if missing else ""
+        reason = f"계산에 필요한 값{named}을 확인하지 못했다 — 계산된 금액은 상한이다"
         amount = 0
 
     # 5. 계산이 실제보다 **작을** 수 있으면 그것도 사람에게 넘긴다.
