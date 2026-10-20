@@ -11,13 +11,19 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from datetime import date
 
 from .models import Claim, ClaimHistory
 
-# KCD-8 코드 표기: 영문 1자 + 숫자 2자 (+ 소수점 세분류)
-_KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
+# 서술 속 KCD 코드. 구조화 입력(`parse_codes`)과 같은 문법으로 읽는다.
+#
+# 처음엔 `\b([A-Z]\d{2}(?:\.\d{1,2})?)\b`였다. 숫자와 한글이 둘 다 \w라 한국어에서
+# 가장 흔한 '코드+조사'(F20으로, F32를)에서 \b가 서지 않았고, 점 없는 표기(F200)와
+# 소문자도 놓쳤다. 서류 코드가 있으면 사전 보강을 끄므로 그 놓침이 그대로 지급으로
+# 샜다(검증 OP-5). 경계는 앞뒤 영숫자로 본다.
+_KCD_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z])(\d{2})(?:\.?(\d{1,3}))?(?![0-9])")
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
 
@@ -51,6 +57,68 @@ def parse_amounts(text: str) -> tuple[int, ...]:
 
 Enricher = Callable[[str], tuple[str, ...]]
 
+# 구조화 입력의 진단코드 한 개. 점 있는 표기(F20.0)와 상병마스터의 점 없는
+# 표기(F200) 둘 다 받는다. 세분류는 두 자리까지만 남긴다 — 면책 범위 대조는
+# 세 자리 분류로 하고, 대조기(`agents.kcd`)가 두 자리까지만 읽는다.
+_CODE_TOKEN_RE = re.compile(r"([A-Z])(\d{2})(?:\.?(\d{1,4}))?")
+# 구분자는 사람과 기계가 쓰는 것을 다 받는다 — 쉼표, 공백, 세미콜론, 전각 쉼표,
+# 가운뎃점(·ㆍ・‧), JSON 배열의 대괄호·따옴표.
+# NFKC가 'ㆍ'(U+318D)를 U+119E로 바꾸므로 둘 다 둔다.
+_CODE_SPLIT_RE = re.compile(r"[\s,;，、·ㆍᆞ・‧/|\[\]\"']+")
+
+
+class InvalidDiagnosisCodeError(ValueError):
+    """구조화 입력에 진단코드가 아닌 값이 섞였다.
+
+    조용히 버리면 안 된다. 버린 토큰이 면책 코드였다면 그 면책을 건너뛰고
+    지급하게 된다 — `"S62.0 F20"`을 한 덩어리로 읽어 F20(조현병) 면책을 놓친
+    것이 그 모양이었다(검토 HIGH-1). 판정하지 않고 되돌려 보낸다.
+    """
+
+
+def _normalize(text: str) -> str:
+    """전각 영숫자(Ｆ２０)·BOM·폭 없는 공백을 정리하고 대문자로."""
+    text = unicodedata.normalize("NFKC", text)
+    return text.replace("﻿", "").replace("​", "").strip().upper()
+
+
+def _code(letter: str, category: str, subdivision: str | None) -> str:
+    letter = letter.upper()
+    return f"{letter}{category}.{subdivision[:2]}" if subdivision else f"{letter}{category}"
+
+
+def codes_in(text: str) -> tuple[str, ...]:
+    """서술에 적힌 KCD 코드를 `parse_codes`와 같은 꼴로."""
+    normalized = unicodedata.normalize("NFKC", text)
+    return tuple(dict.fromkeys(_code(*match) for match in _KCD_RE.findall(normalized)))
+
+
+def parse_codes(raw: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """구조화 입력의 진단코드를 `X00` 또는 `X00.d(d)` 꼴로 고른다.
+
+    전부 빈 토큰이면 빈 튜플 — "주지 않았다"로 읽는다. 하나라도 코드가 아니면
+    `InvalidDiagnosisCodeError`.
+    """
+    tokens = [
+        token
+        for item in raw
+        for token in _CODE_SPLIT_RE.split(_normalize(str(item)))
+        if token
+    ]
+    codes: list[str] = []
+    invalid: list[str] = []
+    for token in tokens:
+        match = _CODE_TOKEN_RE.fullmatch(token)
+        if match is None:
+            invalid.append(token)
+            continue
+        codes.append(_code(*match.groups()))
+    if invalid:
+        raise InvalidDiagnosisCodeError(
+            f"진단코드가 아닌 값: {', '.join(invalid)} — KCD 코드(예: S62.0, F200)만 넣을 것"
+        )
+    return tuple(dict.fromkeys(codes))
+
 
 def extract_claim(
     claim_id: str,
@@ -59,19 +127,53 @@ def extract_claim(
     narrative: str,
     *,
     enrich: Enricher | None = None,
+    weak: Enricher | None = None,
     history: ClaimHistory | None = None,
     room_charge: int = 0,
+    diagnosis_codes: tuple[str, ...] = (),
+    claimed_amount: int | None = None,
+    sum_insured: int | None = None,
+    treated_abroad: bool | None = None,
 ) -> Claim:
     """서술에서 사실을 뽑아 Claim을 만든다.
 
     `history`는 서술에서 뽑지 않는다 — 올해 기지급액과 통원 횟수는 청구인이
     적는 것이 아니라 **보험사 시스템이 아는 값**이다. 없으면 없는 대로 두고,
     계산기가 지급액 대신 상한을 말한다(notes/027).
-    """
-    codes = tuple(dict.fromkeys(_KCD_RE.findall(narrative)))
-    if enrich is not None:
-        codes = tuple(dict.fromkeys([*codes, *enrich(narrative)]))
 
+    **구조화 입력이 서술보다 앞선다.** 진단서·영수증을 읽는 앞단이 코드와
+    금액을 이미 뽑아 왔으면 서술에서 다시 추정하지 않는다.
+
+    - `diagnosis_codes`를 주면 `enrich`를 부르지 않는다. enrich는 상병명
+      부분일치라 서술의 '오른쪽'에서 C34를, '검사비만'에서 E66을 만든다 —
+      진단서에 코드가 있는데 그 추정을 섞으면 서류에 없는 면책 코드로 부지급이
+      날 수 있다. **서술에 적힌 코드는 버리지 않는다.** 그건 추정이 아니라
+      정규식으로 읽은 값이고, 버리면 서술의 "기왕 진단 F20"이 면책에서 빠진다.
+    - 진단코드는 엄격하게 읽는다(`parse_codes`). 코드가 아닌 토큰이 섞이면
+      판정하지 않고 `InvalidDiagnosisCodeError`를 낸다.
+    - `claimed_amount`를 주면 서술의 금액을 읽지 않는다. 서술은 원 단위만
+      읽으므로 "USD 1,800"은 0원이 된다. 환산은 앞단의 일이다.
+    - 0 이하의 `claimed_amount`·`sum_insured`는 "주지 않았다"로 읽는다.
+      가입금액 0원 계약은 없다 — OCR의 빈칸이 0으로 들어온 것일 가능성이 크고,
+      그대로 쓰면 사람에게 가야 할 건이 "부분지급 0원"으로 확정된다.
+
+    **확실하지 않은 코드는 버리지 않고 `weak_codes`에 둔다.** 둘이다 — `weak`
+    훅이 찾은 붙여 쓴 짧은 병명(`kcd.index.BOUNDED_KEY_MAX_LEN`), 그리고 서류
+    코드가 있어 판정 코드로 쓰지 않은 `enrich`의 추정. 면책 범위에 들면 불확실
+    면책으로 사람에게 간다. 버리면 그 면책이 조용히 빠져 지급된다.
+    """
+    stated = parse_codes(diagnosis_codes) if diagnosis_codes else ()
+    written = codes_in(narrative)
+    guessed = enrich(narrative) if enrich is not None else ()
+    unsure: tuple[str, ...] = weak(narrative) if weak is not None else ()
+    if stated:
+        codes = tuple(dict.fromkeys([*stated, *written]))
+        unsure = (*guessed, *unsure)
+    else:
+        codes = tuple(dict.fromkeys([*written, *guessed]))
+    weak_codes = tuple(code for code in dict.fromkeys(unsure) if code not in codes)
+
+    stated_amount = claimed_amount if claimed_amount is not None and claimed_amount > 0 else None
     return Claim(
         claim_id=claim_id,
         history=history,
@@ -82,7 +184,12 @@ def extract_claim(
         diagnosis_codes=codes,
         procedure=_procedure(narrative),
         hospital_days=_hospital_days(narrative),
-        claimed_amount=_amount(narrative),
+        claimed_amount=_amount(narrative) if stated_amount is None else stated_amount,
+        sum_insured=sum_insured if sum_insured is not None and sum_insured > 0 else None,
+        treated_abroad=treated_abroad,
+        stated_codes=stated,
+        weak_codes=weak_codes,
+        stated_amount=stated_amount,
         narrative=narrative.strip(),
     )
 

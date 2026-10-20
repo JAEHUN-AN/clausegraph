@@ -64,7 +64,7 @@ MIN_TAIL_KEY_LEN = 3
 # 코드는 언제나 코드표에서 찾는다. 코드를 손으로 적으면 코드표가 갱신될 때
 # 어긋나고, 그 어긋남을 아무도 모른다.
 # 아래는 전부 코드표에서 실제 표기를 확인한 것만 담았다.
-#   치아우식 -> K02, 복사의 골절 -> S82, 임신중 과다구토 -> O21, 치질 -> K64
+#   치아우식 -> K02, 복사의 골절 -> S82, 임신중 과다구토 -> O21, 치질 -> K64,
 # 확인하지 못한 일상어는 넣지 않는다. 추측한 동의어는 엉뚱한 면책을 걸고,
 # 왜 걸렸는지 아무도 설명하지 못한다.
 SYNONYMS: dict[str, str] = {
@@ -84,6 +84,54 @@ SYNONYMS: dict[str, str] = {
 # 버리면 `치질`(K64)·`비만`(E66)까지 잃는다. 그래서 남겨 두고, 이 잡음이
 # 어떤 면책 구간에도 들지 않는다는 것을 측정으로 확인했다(notes/013).
 EXCLUDED_CHAPTERS = frozenset("UYZ")
+
+# 병명이 아닌데 병명 끝에 붙어 tail 열쇠가 되는 낱말. 청구서에는 거의
+# 늘 나온다.
+#   `상엽, 기관지 또는 폐의 악성 신생물, 오른쪽`  ->  tail '오른쪽' = C34
+#   `벌레먹은 발바닥`(요스)                      ->  tail '발바닥' = A66
+# '오른쪽 손목 골절' 청구에 폐암 코드가 붙었다(2026-10-20 실측, notes/044).
+# 측성·부위 낱말은 병을 가리키지 않으므로 열쇠로 쓰지 않는다.
+NON_DISEASE_KEYS = frozenset({"오른쪽", "왼쪽", "양쪽", "발바닥", "손바닥", "기관"})
+# `기관`(R89 검사물의 이상소견)은 청구서에서 거의 늘 '의료기관'·'양성기관'의 일부다.
+# 붙은 낱말에 따라 코드 하나가 보장종목 판별(질병/상해)을 바꿨다(검증 MEDIUM-1).
+
+# 병명과 일상어의 동음이의. `주사`(L71, 酒皶 — 딸기코)는 청구서에서 거의
+# 언제나 주사(注射)다. '주사를 맞았다'가 피부병 코드를 물어 왔다.
+# 딸기코는 `딸기코증`(L71.1) 전체 병명 열쇠로 여전히 찾는다.
+HOMONYM_KEYS = frozenset({"주사", "유착", "가스"})
+# `유착`(K00.22 치아의 유착) — 청구서의 유착은 거의 늘 장기 유착(복막 K66.0 등)이다.
+#   '복부유착 박리술'이 치과치료(K00∼K08) **확실 면책**으로 부지급됐다(검증 HIGH-1).
+# `가스`(T59 가스의 독성 효과) — '복부가스'(고창)는 질병인데 T가 상해 규칙을 골랐다.
+
+# 이 길이 이하의 열쇠는 앞에 한글이 붙어 있으면, 그 한글이 **병명 수식어로
+# 끝날 때만** 확실한 코드로 친다. 그 밖에 붙어 나온 것은 **약한 코드**다.
+#
+# 2글자 열쇠는 앞 낱말의 끝에 걸린다. '검사비만 청구합니다'(검사비 + 만)의
+# `비만`이 E66을 물어 왔고, E66은 면책 코드라 **확실** 면책 -> 부지급으로
+# 뒤집혔다(2026-10-20, 2회 재현).
+#
+# 처음에는 붙은 것을 전부 버렸다. 그러자 붙여 쓴 **진짜 병명**을 잃었다 —
+# '수술후섬망'(F05) 입원이 급여 실손에서 DENIED에서 PARTIAL 2,400,000원이
+# 됐다(검토 MEDIUM-1). 수식어 목록으로 되살렸지만 목록은 닫혀 있어 '야간섬망'
+# '금단섬망'이 또 빠졌다(검증 REG-1). 목록을 아무리 늘려도 이 모양은 남는다.
+#
+# 그래서 **버리지 않는다.** 목록 밖 앞말에 붙어 나온 코드는 `lookup_weak`로
+# 따로 돌려준다. 약한 코드는 판정에서 두 가지만 한다.
+#   - 면책 코드 범위에 들면 **불확실** 면책 -> 사람 확인 (확실 면책이 아니다)
+#   - 보장종목 판별(상해/질병)과 지급 규칙 선택에는 쓰지 않는다
+# '검사비만'은 그래서 부지급도 지급도 아니고 사람에게 간다.
+#
+# 목록은 실측으로 고른 수식어만 둔다. '양성'(養成 — '양성기관'), '자연'
+# ('자연가스'), '수술 후'(공백이 들어가 _glued_prefix와 맞을 수 없다)는 뺐다.
+BOUNDED_KEY_MAX_LEN = 2
+DISEASE_PREFIXES = (
+    "급성", "만성", "아급성", "초기", "말기", "조기", "진행성", "재발성", "반복성",
+    "습관성", "선천성", "후천성", "외상성", "노인성", "소아", "영아", "신생아", "산후",
+    "임신성", "알코올성", "약물성", "세균성", "바이러스성", "흡인성", "혈관성", "이차성",
+    "원발성", "속발성", "전이성", "악성", "수술후", "금단", "야간", "중환자실", "고도",
+    "병적", "중증", "경증", "경도", "중등도", "복부", "과다",
+)
+_HANGUL_RE = re.compile(r"[가-힣]")
 
 # 병명 앞에 붙는 수식어. 떼어 내면 청구서의 말과 맞을 확률이 올라간다.
 _MODIFIER_RE = re.compile(
@@ -165,25 +213,74 @@ class KcdIndex:
         일상어를 먼저 공식 표기로 바꾼다 — 청구서의 '충치'는 코드표에
         없고 `치아우식`이다.
         """
+        return self._scan(narrative)[0]
+
+    def lookup_weak(self, narrative: str) -> tuple[str, ...]:
+        """병명 수식어가 아닌 앞말에 붙어 나온 짧은 열쇠의 코드.
+
+        `lookup`과 겹치는 코드는 뺀다. 판정에서는 불확실 면책으로만 쓴다
+        (`BOUNDED_KEY_MAX_LEN` 설명).
+        """
+        strong, weak = self._scan(narrative)
+        return tuple(code for code in weak if code not in strong)
+
+    def _scan(self, narrative: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
         text = narrative
         for everyday, official in SYNONYMS.items():
             if everyday in text:
                 text = f"{text} {official}"
 
         found: list[str] = []
+        weak: list[str] = []
         matched: list[str] = []
         for term in self._terms:
-            if term not in text:
+            occurrence = _occurrence(term, text)
+            if occurrence is None:
                 continue
             # 이미 맞은 더 긴 열쇠의 부분 문자열이면 건너뛴다 —
             # `복사의 골절`이 맞았는데 `골절`까지 누적하면 M·P·S·T가 섞인다.
             if any(term in longer for longer in matched):
                 continue
+            if occurrence == "weak":
+                weak.extend(code for code in self._by_term[term] if code not in weak)
+                continue
             matched.append(term)
             for code in self._by_term[term]:
                 if code not in found:
                     found.append(code)
-        return tuple(found)
+        return tuple(found), tuple(weak)
+
+
+def _occurrence(term: str, text: str) -> str | None:
+    """열쇠가 서술에 어떻게 나타나는가 — "strong", "weak", 없으면 None.
+
+    짧은 열쇠는 앞에 붙은 한글이 병명 수식어(`DISEASE_PREFIXES`)로 끝나거나
+    아무것도 안 붙었을 때 strong이다. 한 번이라도 strong으로 나타나면 strong이다.
+    """
+    if len(term) > BOUNDED_KEY_MAX_LEN:
+        return "strong" if term in text else None
+    seen = None
+    start = text.find(term)
+    while start != -1:
+        glued = _glued_prefix(text, start)
+        if not glued or glued.endswith(DISEASE_PREFIXES):
+            return "strong"
+        seen = "weak"
+        start = text.find(term, start + 1)
+    return seen
+
+
+def _occurs(term: str, text: str) -> bool:
+    """확실한 코드로 칠 만큼 나타나는가."""
+    return _occurrence(term, text) == "strong"
+
+
+def _glued_prefix(text: str, start: int) -> str:
+    """`start` 바로 앞에 띄어쓰기 없이 붙은 한글 덩어리."""
+    begin = start
+    while begin > 0 and _HANGUL_RE.match(text[begin - 1]):
+        begin -= 1
+    return text[begin:start]
 
 
 def load_index(csv_path: Path = DEFAULT_CSV) -> KcdIndex:
@@ -254,6 +351,9 @@ def _build_term_index(diseases: list[Disease]) -> dict[str, tuple[str, ...]]:
         if not category or category[0] in EXCLUDED_CHAPTERS:
             continue
         full_keys, tail_keys = term_keys(disease.name)
+        blocked = NON_DISEASE_KEYS | HOMONYM_KEYS
+        full_keys = [key for key in full_keys if key not in blocked]
+        tail_keys = [key for key in tail_keys if key not in blocked]
         for key in full_keys:
             if category not in full_buckets[key]:
                 full_buckets[key].append(category)

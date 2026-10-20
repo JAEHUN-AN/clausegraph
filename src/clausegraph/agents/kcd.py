@@ -37,9 +37,12 @@ class CodeRange:
         letter, number, subdivision = match.group(1), int(match.group(2)), match.group(3)
         if letter != self.letter or not (self.start <= number <= self.end):
             return False
-        # 약관이 세분류까지 못박았다면(N39.3) 그 세분류만 걸린다.
+        # 약관이 세분류까지 못박았다면(N39.3) 그 세분류와 **그 아래**가 걸린다.
+        # 완전 일치로 보면 상병마스터의 N3940(절박요실금)이 N39.4 면책을 빠져나가
+        # 지급됐다(검토 OP-2). 세분류가 없는 청구 코드(N39)는 N39.3을 증명하지
+        # 못하므로 걸리지 않는다.
         if self.subdivision is not None:
-            return subdivision == self.subdivision
+            return subdivision is not None and subdivision.startswith(self.subdivision)
         return True
 
 

@@ -71,8 +71,14 @@ def compute(
     history: ClaimHistory | None = None,
     room_charge: int = 0,
     hospital_days: int = 0,
+    sum_insured: int | None = None,
+    no_rule_reason: str | None = None,
 ) -> Amount:
-    """청구액과 약관 파라미터로 지급액을 계산한다."""
+    """청구액과 약관 파라미터로 지급액을 계산한다.
+
+    `sum_insured`는 보험증권의 보험가입금액이다. 한도를 약관이 아니라
+    증권이 정하는 상품(`limit_from_policy`)에서만 쓴다.
+    """
     if claimed_amount <= 0:
         return Amount(0, computed=False, basis="청구액이 없어 계산할 수 없다")
 
@@ -83,7 +89,10 @@ def compute(
         return Amount(
             0,
             computed=False,
-            basis="이 상품·보장종목의 지급 파라미터가 없다 — 심사자 확인이 필요하다",
+            # 일부러 고르지 않은 경우(해외 치료에 국내 상품, 섞인 보장종목)는 그
+            # 이유를 적는다. "파라미터가 없다"로 뭉개면 심사자가 엉뚱한 값을 찾는다.
+            basis=no_rule_reason
+            or "이 상품·보장종목의 지급 파라미터가 없다 — 심사자 확인이 필요하다",
         )
 
     ready = (
@@ -104,6 +113,9 @@ def compute(
     missing: list[str] = []
     missing_downward: list[str] = []
 
+    if rule.limit_from_policy:
+        steps.append("보험가입금액 한도로 실제 부담한 의료비 전액(공제 없음)")
+
     # 1. 공제 — 통원에만. 약관은 여러 항 중 **큰 금액**을 빼라고 한다.
     #    항을 하나라도 빼먹으면 공제를 덜 빼게 되고, 그건 곧 과다지급이다.
     deductible = 0
@@ -111,9 +123,12 @@ def compute(
         deductible, missing = _outpatient_deductible(
             claimed_amount, rule, institution, copay_rate
         )
-        note = "덜 뺐을 수 있다" if missing else "여러 항 중 큰 쪽"
-        label = "1회당 공제" if rule.deductible_applies_to_inpatient else "통원 공제"
-        steps.append(f"{label} {deductible:,}원({note})")
+        # 공제가 없는 행(해외 의료비)에서 "공제 0원"을 적으면 읽는 사람이
+        # 공제를 계산하다 만 것으로 본다. 뺀 것이 있을 때만 적는다.
+        if deductible or missing:
+            note = "덜 뺐을 수 있다" if missing else "여러 항 중 큰 쪽"
+            label = "1회당 공제" if rule.deductible_applies_to_inpatient else "통원 공제"
+            steps.append(f"{label} {deductible:,}원({note})")
     payable = max(0, claimed_amount - deductible)
 
     # 2. 보상비율 — 입원과 통원이 다르다. 통원은 약관이 비율을 걸지 않아
@@ -205,15 +220,34 @@ def compute(
     #
     #    **기지급액을 0으로 두지 않는다.** 0으로 두면 모든 청구를 그 해 첫
     #    청구로 보게 되고, 한도를 이미 다 쓴 계약에 그대로 지급한다.
+    #
+    #    증권이 한도를 정하는 상품(해외여행 기본형)은 한도가 연간이 아니라
+    #    **그 계약의 보험가입금액**이다. 같은 계약에서 이미 받은 금액을 뺀다.
+    from_policy = rule.limit_from_policy and rule.annual_limit is None
+    limit_label = "보험가입금액" if from_policy else "연간한도"
+    paid_label = "이 계약 기지급액" if from_policy else "올해 기지급액"
+    limit = rule.annual_limit
+    if from_policy:
+        # 0 이하는 모르는 값이다 — 가입금액 0원 계약은 없다. 0으로 한도를 걸면
+        # 사람에게 가야 할 건이 "부분지급 0원"으로 확정된다.
+        if sum_insured is None or sum_insured <= 0:
+            missing.append("보험가입금액(증권)")
+        else:
+            limit = sum_insured
     if history is None:
-        missing.append("올해 기지급액")
+        missing.append(paid_label)
     already_paid_this_year = history.paid_this_year if history else 0
-    remaining = max(0, (rule.annual_limit or 0) - already_paid_this_year)
-    if payable > remaining:
-        steps.append(f"연간한도 잔액 {remaining:,}원으로 제한")
-        payable = remaining
+    if limit is None:
+        # 한도를 모르면 걸지 못한다. 지어낸 한도로 깎지도 않는다 — 금액은
+        # 위에서 `missing`에 적은 대로 상한이 된다.
+        steps.append(f"{limit_label}을 몰라 한도를 걸지 못했다")
     else:
-        steps.append(f"연간한도 잔액 {remaining:,}원 이내")
+        remaining = max(0, limit - already_paid_this_year)
+        if payable > remaining:
+            steps.append(f"{limit_label} 잔액 {remaining:,}원으로 제한")
+            payable = remaining
+        else:
+            steps.append(f"{limit_label} 잔액 {remaining:,}원 이내")
 
     if missing:
         steps.append(f"{', '.join(missing)}을 확인하지 못해 이 금액은 상한이다")

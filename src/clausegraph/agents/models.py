@@ -53,6 +53,40 @@ class Claim(BaseModel):
             " 입원의료비와 따로 계산한다. 0이면 상급병실료를 청구하지 않은 것이다"
         ),
     )
+    sum_insured: int | None = Field(
+        default=None,
+        description=(
+            "보험증권의 보험가입금액(원). 해외여행 기본형의 해외 의료비는 한도가"
+            " 약관이 아니라 증권에 있다. 없으면 지급액 대신 상한만 말한다"
+        ),
+    )
+    treated_abroad: bool | None = Field(
+        default=None,
+        description=(
+            "해외의료기관에서 치료받았는가. 해외 의료비 행은 공제 없이 전액을"
+            " 주므로, 모르면(None) 해외로 치지 않는다"
+        ),
+    )
+    stated_codes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "서류를 읽는 앞단이 구조화해 넘긴 진단코드. 재심사에서 서술을 새로"
+            " 받아도 이 값은 남는다 — 청구인이 다시 쓴 문장이 진단서의 코드를"
+            " 덮어쓰면 면책이 사라진다"
+        ),
+    )
+    weak_codes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "확실하지 않은 코드 — 붙여 쓴 낱말에서 나왔거나, 서류 코드가 있어 추정을"
+            " 끈 사전이 찾은 것. 면책 범위에 들면 불확실 면책(사람 확인)이 되고,"
+            " 보장종목 판별과 지급 규칙 선택에는 쓰지 않는다"
+        ),
+    )
+    stated_amount: int | None = Field(
+        default=None,
+        description="앞단이 넘긴 원화 청구액. 재심사에서 서술을 새로 받아도 남는다",
+    )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
 

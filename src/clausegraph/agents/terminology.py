@@ -28,6 +28,15 @@ _TERMS: dict[str, tuple[str, ...]] = {
 }
 
 
+def weak_lookup(narrative: str) -> tuple[str, ...]:
+    """확실하지 않은 코드 — 판정에서는 불확실 면책으로만 쓴다.
+
+    코드표가 없으면(대역 표) 약한 코드도 없다.
+    """
+    index = _kcd_index()
+    return index.lookup_weak(narrative) if index is not None else ()
+
+
 def lookup(narrative: str) -> tuple[str, ...]:
     """서술에서 코드를 찾는다. 코드표가 있으면 사전으로, 없으면 대역 표로."""
     index = _kcd_index()

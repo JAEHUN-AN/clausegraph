@@ -702,6 +702,116 @@ def test_unknown_product_has_no_rule() -> None:
     assert find_rule("존재하지 않는 상품", "(1)상해급여") is None
 
 
+# --- 해외여행 기본형의 해외 의료비 ---
+
+OVERSEAS = "기본형 해외여행 실손의료보험"
+
+
+def test_overseas_rule_is_not_chosen_unless_treated_abroad() -> None:
+    # 해외 행은 공제 없이 전액이다. 치료 장소를 모르는데 해외로 치면 국내
+    # 치료에 100%를 주는 과다지급이 된다.
+    assert find_rule(OVERSEAS, None, ("S62.0",)) is None
+    assert find_rule(OVERSEAS, None, ("S62.0",), abroad=False) is None
+    assert find_rule(OVERSEAS, "(1)상해의료비 해외", ("S62.0",)) is None
+
+
+def test_overseas_rule_is_chosen_by_diagnosis_when_abroad() -> None:
+    injury = find_rule(OVERSEAS, None, ("S62.0",), abroad=True)
+    disease = find_rule(OVERSEAS, None, ("A05.9",), abroad=True)
+
+    assert injury is not None and injury.coverage == "(1)상해의료비 해외"
+    assert disease is not None and disease.coverage == "(2)질병의료비 해외"
+
+
+def test_overseas_pays_actual_cost_in_full_up_to_sum_insured() -> None:
+    # 제3조 표 해외 ① "보험가입금액을 한도로 … 실제 부담한 의료비 전액"
+    rule = find_rule(OVERSEAS, None, ("S62.0",), abroad=True)
+
+    result = compute(
+        2_500_000, days_since_enrollment=42, rule=rule, inpatient=False,
+        history=ClaimHistory(), sum_insured=10_000_000,
+    )
+
+    assert result.computed is True
+    assert result.value == 2_500_000
+    assert result.is_upper_bound is False
+    assert "공제 0원" not in result.basis
+    assert "보험가입금액 잔액 10,000,000원 이내" in result.basis
+
+
+def test_overseas_limit_is_what_is_left_of_the_sum_insured() -> None:
+    rule = find_rule(OVERSEAS, None, ("S62.0",), abroad=True)
+
+    result = compute(
+        2_500_000, days_since_enrollment=42, rule=rule, inpatient=True,
+        history=ClaimHistory(paid_this_year=500_000), sum_insured=2_000_000,
+    )
+
+    assert result.value == 1_500_000
+
+
+def test_overseas_without_sum_insured_is_an_upper_bound() -> None:
+    # 한도가 증권에 있다(제5조 ① "계약시 계약자가 선택한 금액"). 모르는
+    # 한도를 지어내지 않고, 깎지도 않은 금액을 상한이라고 말한다.
+    rule = find_rule(OVERSEAS, None, ("S62.0",), abroad=True)
+
+    result = compute(
+        2_500_000, days_since_enrollment=42, rule=rule, inpatient=False,
+        history=ClaimHistory(),
+    )
+
+    assert result.computed is True
+    assert result.is_upper_bound is True
+    assert "보험가입금액(증권)" in result.missing
+
+
+def test_overseas_missing_history_names_the_contract_not_the_year() -> None:
+    rule = find_rule(OVERSEAS, None, ("S62.0",), abroad=True)
+
+    result = compute(
+        2_500_000, days_since_enrollment=42, rule=rule, inpatient=False,
+        sum_insured=10_000_000,
+    )
+
+    assert result.missing == ("이 계약 기지급액",)
+
+
+# --- 구조화 입력 ---
+
+
+def test_explicit_codes_skip_the_enricher() -> None:
+    # 서술의 '오른쪽'이 상병마스터 부분일치로 C34가 되던 일을 막는다.
+    claim = extract_claim(
+        "C", OVERSEAS, ENROLLED, "오른쪽 손목이 부러졌다",
+        enrich=lambda _: ("C34",), diagnosis_codes=("s62.0", " "),
+    )
+
+    assert claim.diagnosis_codes == ("S62.0",)
+
+
+def test_without_explicit_codes_the_enricher_still_runs() -> None:
+    claim = extract_claim(
+        "C", OVERSEAS, ENROLLED, "손목 골절(S62.0)", enrich=lambda _: ("W19",),
+    )
+
+    assert claim.diagnosis_codes == ("S62.0", "W19")
+
+
+def test_explicit_amount_wins_over_the_narrative() -> None:
+    # 서술은 원 단위만 읽는다 — "USD 1,800"은 0원이다. 환산은 앞단이 한다.
+    narrative = "응급실 진료비 USD 1,800"
+    assert extract_claim("C", OVERSEAS, ENROLLED, narrative).claimed_amount == 0
+
+    claim = extract_claim(
+        "C", OVERSEAS, ENROLLED, narrative,
+        claimed_amount=2_500_000, sum_insured=10_000_000, treated_abroad=True,
+    )
+
+    assert claim.claimed_amount == 2_500_000
+    assert claim.sum_insured == 10_000_000
+    assert claim.treated_abroad is True
+
+
 # --- 가드레일 ---
 
 
