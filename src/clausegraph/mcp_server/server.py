@@ -815,7 +815,7 @@ def _revise(
 
 
 def _hold_treatment(before: Claim, after: Claim) -> Claim:
-    """앞 판에 있던 3대비급여ㆍ비급여 MRI 표지를 새 판에 남긴다(notes/046).
+    """앞 판에 있던 3대비급여ㆍ비급여 MRI 표지를 새 판에 남긴다(notes/048).
 
     서술에서 읽은 값은 정정을 따르지만 이 표지는 예외다. 사라지면 (1)(2) 산식으로
     지급액이 나간다 — 도수치료 청구를 "허리 통증 통원"으로 고쳐 말하자 HUMAN_REVIEW가

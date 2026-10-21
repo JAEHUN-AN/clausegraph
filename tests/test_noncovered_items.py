@@ -1,4 +1,4 @@
-"""3대비급여ㆍ비급여 MRI 청구에 (1)(2) 규칙을 고르지 않는다 (notes/046).
+"""3대비급여ㆍ비급여 MRI 청구에 (1)(2) 규칙을 고르지 않는다 (notes/048).
 
 2026-10-21 반박 검증에서 재현했다. `find_rule`이 진단코드로 상해/질병만 갈라
 특약1 도수치료 청구를 (2)질병비급여(연 5천만원ㆍ통원 1회 20만원)로 계산했다 —
@@ -123,7 +123,7 @@ def test_repro_claim_is_not_partial_in_the_langgraph_orchestrator(monkeypatch) -
 
 
 def test_mild_musculoskeletal_claim_is_held_end_to_end(monkeypatch) -> None:
-    """특약2 도수치료 — 면책 검증이 놓쳐 5만원이 나가던 청구(notes/046)."""
+    """특약2 도수치료 — 면책 검증이 놓쳐 5만원이 나가던 청구(notes/048)."""
     result = _adjudicate(monkeypatch, _claim(MILD, REPRO_NARRATIVE, history=ClaimHistory()))
 
     assert result.decision is Decision.HUMAN_REVIEW

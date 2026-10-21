@@ -196,7 +196,7 @@ def _run(
         (hit.evidence.node_uid.split("#")[1] for hit in uncertain if "#" in hit.evidence.node_uid),
         None,
     )
-    # 3대비급여ㆍ비급여 MRI는 진단코드가 아니라 의료행위로 갈린다(notes/046).
+    # 3대비급여ㆍ비급여 MRI는 진단코드가 아니라 의료행위로 갈린다(notes/048).
     rule = find_rule(
         claim.product, coverage, claim.diagnosis_codes,
         abroad=claim.treated_abroad, treatment=claim.treatment,

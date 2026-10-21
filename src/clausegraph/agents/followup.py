@@ -92,7 +92,7 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
         found.append("일자")
 
     # "사실 도수치료 받은 건데요" — 청구에 없던 3대비급여ㆍMRI는 지급 규칙을 바꾼다
-    # (notes/046). 금액 질문으로 읽으면 (1)(2)로 낸 낡은 금액을 설명하게 된다.
+    # (notes/048). 금액 질문으로 읽으면 (1)(2)로 낸 낡은 금액을 설명하게 된다.
     known_items = carved_out_items(claim.product, claim.treatment)
     if carved_out_items(claim.product, question).keys() - known_items.keys():
         found.append("시술")
