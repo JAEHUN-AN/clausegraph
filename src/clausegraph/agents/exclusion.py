@@ -221,13 +221,13 @@ def screen(
         # 조문에 코드가 없는 면책도 **사유 자체를 말하는 코드**가 있다. X78(의도적
         # 자해)이 서류에 있는데 '고의로 자신을 해친 경우' 면책을 못 보고 지급했다
         # (검증 OP-3). 단서(심신상실 등)가 있어 불확실로 낸다.
-        reasoned = _reason_code_hit(text, claim.diagnosis_codes)
+        reasoned = _reason_hit(text, claim)
         if reasoned:
-            code, label = reasoned
+            code, reason = reasoned
             hits.append(
                 ExclusionHit(
                     evidence=evidence,
-                    reason=f"진단코드 {code}({label})가 이 면책 사유를 가리킨다 — 사람 확인 필요",
+                    reason=reason,
                     certain=False,
                     matched_codes=(code,),
                     exceptions=_exception_evidence(candidate, claim.product),
@@ -259,6 +259,25 @@ REASON_CODES: tuple[tuple[str, int, int, str, tuple[str, ...]], ...] = (
     ("Z", 41, 41, "건강 상태 외 목적의 처치(미용 등)", ("외모개선",)),
 )
 _CODE_PARTS_RE = re.compile(r"([A-Z])(\d{2})")
+
+
+def _reason_hit(clause: str, claim: Claim) -> tuple[str, str] | None:
+    """사유 코드 히트와 그 사유 문장. (코드, 사유).
+
+    **약한 코드도 본다.** 서류 코드를 주면 사전이 서술에서 읽은 코드가 약한 코드로
+    내려간다 — "의도적 자해로 발목 골절" + 진단서 S82.0이면 X80이 약한 쪽이다. 강한
+    코드만 보면 서류를 준 청구에서만 자해 면책이 빠져 지급됐다(notes/049). 코드 범위
+    면책의 약한 코드(`matches(text, claim.weak_codes)`)와 같은 대접이다.
+    """
+    for codes, source in (
+        (claim.diagnosis_codes, "진단코드"),
+        (claim.weak_codes, "서술에서 확실하지 않게 읽힌 코드"),
+    ):
+        hit = _reason_code_hit(clause, codes)
+        if hit:
+            code, label = hit
+            return code, f"{source} {code}({label})가 이 면책 사유를 가리킨다 — 사람 확인 필요"
+    return None
 
 
 def _reason_code_hit(clause: str, codes: tuple[str, ...]) -> tuple[str, str] | None:

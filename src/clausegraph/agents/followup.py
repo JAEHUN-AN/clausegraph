@@ -30,14 +30,18 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-from .amount_rules import carved_out_items
-from .extract import INSTITUTIONS, parse_amounts
+from .amount_rules import NONCOVERED, carved_out_items
+from .extract import INSTITUTIONS, codes_in, parse_amounts
 from .models import Adjudication, Claim, Decision
 from .session import Session
 
 # 사실추출과 같은 표기를 본다. 여기서 값을 뽑으려는 게 아니라
 # "판정의 입력이 바뀌는가"만 가리면 된다.
-_KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
+#
+# 진단코드는 사실추출의 `codes_in`을 그대로 쓴다. 여기에 따로 둔 옛 정규식
+# `\b([A-Z]\d{2}(?:\.\d{1,2})?)\b`는 extract가 OP-5에서 버린 판본이었다 — "F20으로"ㆍ
+# "F200"ㆍ"f32를"을 못 읽어 낡은 확정액을 설명했고, 거꾸로 "J20.9로"를 J20으로 읽어 아는
+# 코드를 새 사실로 셌다(notes/049). 두 단계가 다른 문법으로 읽으면 한쪽만 놓친다.
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
 
@@ -110,8 +114,7 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
     elif fresh_amounts:
         found.append("청구금액")
 
-    codes = {code for code in _KCD_RE.findall(question.upper())}
-    if codes - set(claim.diagnosis_codes):
+    if set(codes_in(question)) - set(claim.diagnosis_codes):
         found.append("진단코드")
 
     days = _DAYS_RE.search(question)
@@ -123,9 +126,13 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
 
     # "사실 도수치료 받은 건데요" — 청구에 없던 3대비급여ㆍMRI는 지급 규칙을 바꾼다
     # (notes/048). 금액 질문으로 읽으면 (1)(2)로 낸 낡은 금액을 설명하게 된다.
+    # 급여 실손의 "사실 비급여였어요"도 같다 — 제4조의2가 보상하지 않는다(notes/049).
     known_items = carved_out_items(claim.product, claim.treatment)
-    if carved_out_items(claim.product, question).keys() - known_items.keys():
+    fresh_items = carved_out_items(claim.product, question).keys() - known_items.keys()
+    if fresh_items - {NONCOVERED}:
         found.append("시술")
+    if NONCOVERED in fresh_items:
+        found.append("비급여")
 
     # "사실 상급종합병원이었어요" — 영수증 값이 바뀌면 확정 지급액도 바뀐다. 영수증 값을
     # 받은 청구에서만 센다. 분쟁 서술에는 "요양병원에 입원했는데"처럼 기관 이름이 지나가듯

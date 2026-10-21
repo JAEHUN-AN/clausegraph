@@ -853,7 +853,8 @@ def _revise(
 
 
 def _hold_treatment(before: Claim, after: Claim) -> Claim:
-    """앞 판에 있던 3대비급여ㆍ비급여 MRI 표지를 새 판에 남긴다(notes/048).
+    """앞 판에 있던 3대비급여ㆍ비급여 MRI 표지와 급여 실손의 '비급여'를 새 판에 남긴다
+    (notes/048ㆍ049).
 
     서술에서 읽은 값은 정정을 따르지만 이 표지는 예외다. 사라지면 (1)(2) 산식으로
     지급액이 나간다 — 도수치료 청구를 "허리 통증 통원"으로 고쳐 말하자 HUMAN_REVIEW가
@@ -875,8 +876,9 @@ def _held_note(claim: Claim) -> str:
         return ""
     words = ", ".join(f"'{word}'" for word in claim.held_treatment)
     return (
-        f"앞 서술의 표지 {words} — 새 서술에 없어도 남겼다. 3대비급여ㆍ비급여 MRI 표지는"
-        " 정정만으로 지우지 않는다 — 시술이 바뀐 것이 맞는지는 심사자가 확인할 것.\n"
+        f"앞 서술의 표지 {words} — 새 서술에 없어도 남겼다. 3대비급여ㆍ비급여 MRI 표지와"
+        " 급여 실손의 '비급여'는 정정만으로 지우지 않는다 — 시술ㆍ급여 구분이 바뀐 것이"
+        " 맞는지는 심사자가 확인할 것.\n"
     )
 
 
