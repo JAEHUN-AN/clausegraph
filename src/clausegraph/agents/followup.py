@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-from .amount_rules import NONCOVERED, carved_out_items
+from .amount_rules import COVERED, NONCOVERED, carved_out_items
 from .extract import INSTITUTIONS, codes_in, parse_amounts
 from .models import Adjudication, Claim, Decision
 from .session import Session
@@ -127,12 +127,15 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
     # "사실 도수치료 받은 건데요" — 청구에 없던 3대비급여ㆍMRI는 지급 규칙을 바꾼다
     # (notes/048). 금액 질문으로 읽으면 (1)(2)로 낸 낡은 금액을 설명하게 된다.
     # 급여 실손의 "사실 비급여였어요"도 같다 — 제4조의2가 보상하지 않는다(notes/049).
+    # 비급여 특약의 "사실 급여 본인부담금이에요"는 거울상이다 — 제3조가 보상하지 않는다(notes/050).
     known_items = carved_out_items(claim.product, claim.treatment)
     fresh_items = carved_out_items(claim.product, question).keys() - known_items.keys()
-    if fresh_items - {NONCOVERED}:
+    if fresh_items - {NONCOVERED, COVERED}:
         found.append("시술")
     if NONCOVERED in fresh_items:
         found.append("비급여")
+    if COVERED in fresh_items:
+        found.append("급여")
 
     # "사실 상급종합병원이었어요" — 영수증 값이 바뀌면 확정 지급액도 바뀐다. 영수증 값을
     # 받은 청구에서만 센다. 분쟁 서술에는 "요양병원에 입원했는데"처럼 기관 이름이 지나가듯

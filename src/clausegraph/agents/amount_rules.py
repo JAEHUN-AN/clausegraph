@@ -30,10 +30,10 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
 
 from ..graph.schema import article_uid
+from .benefit_markers import clean, covered_word, noncovered_word, word_at
 
 
 @dataclass(frozen=True)
@@ -406,8 +406,10 @@ _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}
 MUSCULOSKELETAL = "근골격계 이학요법ㆍ체외충격파치료"
 INJECTION = "주사료"
 MRI = "자기공명영상진단"
-# 급여 실손은 비급여를 아예 보상하지 않는다(제4조의2, 아래 `_NONCOVERED_RE`).
+# 급여 실손은 비급여를 아예 보상하지 않는다(제4조의2, 표지는 `benefit_markers`).
 NONCOVERED = "비급여"
+# 비급여 특약은 급여를 아예 보상하지 않는다(제3조, 표지는 `benefit_markers`).
+COVERED = "급여"
 
 # 특약1 제2조가 이학요법의 예로 든 것 — "FIMS(기능적근육내 자극치료), 신장분사치료,
 # 도수치료, 증식치료, 비침습적 무통증 신호요법 등" — 과 현장 표기("도수 10회",
@@ -430,38 +432,16 @@ _MRI_RE = re.compile(r"자기\s*공명|MR(?:I|A|CP)|엠\s*알\s*아이", re.IGNO
 _INJECTION_RE = re.compile(r"주사|수액|[링닝][거겔게]")
 _INJECTION_NOTE = "항암제ㆍ항생제ㆍ희귀의약품 주사면 (1)(2)에서 보상한다 — 약제 확인 필요"
 
-# 급여 실손 제4조의2(특별약관에서 보상하는 사항)
-#
-#   ① "제3조 및 제4조에도 불구하고 다음 각 호에 해당하는 의료비는 기본형
-#      실손의료보험에서 보상하지 않습니다. 1. 비급여 의료비 …"
-#   ② "… 다른 의료비가 함께 청구되어 각 항목별 의료비가 구분되지 않는 경우 회사는 …
-#      각각의 의료비에 대한 확인을 요청할 수 있습니다."
-#
-# 이 조문은 면책(`Article:Exclusion`)이 아니라 면책 검증이 열거하지 않는다. 그래서
-# "비급여 도수치료 통원" 급여 실손 청구가 (2)질병급여로 확정됐다 — 의원ㆍ본인부담률
-# 0.3이면 10만원에 7만원, 입원 100만원이면 80만원(notes/049).
-#
-# 의료행위 이름(도수치료ㆍMRIㆍ주사)으로는 가르지 않는다 — 급여 MRIㆍ급여 주사는 급여
-# 의료비다(notes/048). 청구인이 "비급여"라고 말한 것만 본다.
-#
-# - 붙여 쓴 "비급여"(와 "비급 여")는 어디서나. 기호ㆍ띄어쓰기를 끼운 꼴("비 급여", "비-급여",
-#   "비ㆍ급여", "(비)급여")은 '비'가 홀로 섰을 때만 — "치료비 급여 항목"의 '비'는 '치료비'의 것이다.
-# - "비보험"도 '비'가 홀로 섰을 때만. 실제 분쟁 문장 160건에서 "비 보험" 4건이 모두 "진단비
-#   보험금"ㆍ"수리비 보험금"이었다 — 앞이 한글인 '비'다. "실비보험"도 같은 이유로 거른다.
-# - 한자 "非給與". 폭 없는 문자ㆍBOMㆍ소프트 하이픈은 `_clean`이 먼저 지운다.
-#
-# 처음엔 `비급여|(?<![가-힣])비\s+급여`였다. 반박 검토에서 폭 없는 공백(U+200B)을 끼운
-# "비급여"ㆍ"비-급여"ㆍ"非給與"ㆍ"비보험"이 빠져나가 급여 입원 100만원에 800,000원이 그대로
-# 나갔다(notes/049).
-# "건강보험 적용 안 되는" 같은 풀어 쓴 말은 읽지 않는다.
-_NONCOVERED_SEP = r"[\s\-·ㆍᆞ・‧()\[\]]*"
-_NONCOVERED_RE = re.compile(
-    r"비급\s*여"
-    rf"|(?<![가-힣])비{_NONCOVERED_SEP}(?:급{_NONCOVERED_SEP}여|보험)"
-    r"|非\s*(?:給\s*與|급\s*여)"
-)
+# 급여 실손 제4조의2 — ② "… 다른 의료비가 함께 청구되어 각 항목별 의료비가 구분되지 않는 경우
+# 회사는 … 각각의 의료비에 대한 확인을 요청할 수 있습니다." 표지는 `benefit_markers`(notes/049).
 _NONCOVERED_NOTE = (
     "급여 의료비와 함께 청구됐으면 영수증의 급여ㆍ비급여 구분이 필요하다 — 제4조의2 ②"
+)
+
+# 비급여 특약 제3조 — 보상 대상은 비급여 의료비뿐이다. 표지는 `benefit_markers`(notes/050).
+_COVERED_NOTE = (
+    "특약은 비급여 의료비만 보상한다 — 급여 본인부담금은 기본형(급여 실손)에서 보상하며,"
+    " 비급여와 함께 청구됐으면 영수증의 급여ㆍ비급여 구분이 필요하다"
 )
 
 # 상품마다 그 항목을 (1)(2) 대신 어디서 다루는가. 해외여행 기본형에는 이 구분이
@@ -472,7 +452,7 @@ _ITEM_RULES: dict[tuple[str, str], str] = {
     (SEVERE, MRI): "(3)3대비급여-자기공명영상진단",
     (MILD, MRI): "(3)비급여 자기공명영상진단",
 }
-# 보상하지 않는 항목과 그 조문.
+# 보상하지 않는 항목과 그 조문. 급여 실손의 비급여는 제4조의2, 비급여 특약의 급여는 제3조.
 #
 # 특약2 제4조 — "근골격계 이학요법 치료행위에 수반된 일체의 의료비", "체외충격파
 # 치료행위에 수반된 일체의 의료비", "항암제, 항생제, 희귀의약품을 제외한
@@ -483,8 +463,14 @@ _ITEM_EXCLUDED: dict[tuple[str, str], str] = {
     (MILD, MUSCULOSKELETAL): "제4조",
     (MILD, INJECTION): "제4조",
     (BENEFIT, NONCOVERED): "제4조의2",
+    (SEVERE, COVERED): "제3조",
+    (MILD, COVERED): "제3조",
 }
-_ITEM_NOTES: dict[str, str] = {INJECTION: _INJECTION_NOTE, NONCOVERED: _NONCOVERED_NOTE}
+_ITEM_NOTES: dict[str, str] = {
+    INJECTION: _INJECTION_NOTE,
+    NONCOVERED: _NONCOVERED_NOTE,
+    COVERED: _COVERED_NOTE,
+}
 
 
 _ITEM_PATTERNS = (
@@ -493,61 +479,34 @@ _ITEM_PATTERNS = (
     (MRI, _MRI_RE),
 )
 
-# 사유에 낱말을 적을 때 떼는 조사 — '도수치료를'이 아니라 '도수치료'.
-_PARTICLE_RE = re.compile(r"(?:으로|에서|에게|까지|부터|를|을|이|가|은|는|와|과|도|만|에|의|로)$")
 
 
 def noncovered_items(treatment: str) -> dict[str, str]:
-    """서술ㆍ시술명에 나온 3대비급여ㆍ비급여 MRI 항목과 '비급여'라는 말, 그렇게 읽은 낱말."""
-    text = _clean(treatment)
+    """서술ㆍ시술명에 나온 3대비급여ㆍ비급여 MRI 항목과 '비급여'ㆍ'급여' 구분, 그렇게 읽은 낱말."""
+    text = clean(treatment)
     found: dict[str, str] = {}
     for item, pattern in _ITEM_PATTERNS:
         match = pattern.search(text)
         if match:
-            found[item] = _word(text, *match.span())
-    # '비급여'는 의료행위가 아니라 구분이다. 둘레 낱말을 붙이지 않고("급여ㆍ비급여"를 통째로
-    # 적으면 무엇을 가리키는지 흐려진다) 끼운 기호만 뺀다 — "비-급여"는 '비급여'로 적는다.
-    match = _NONCOVERED_RE.search(text)
-    if match:
-        found[NONCOVERED] = re.sub(_NONCOVERED_SEP, "", match.group(0))
+            found[item] = word_at(text, *match.span())
+    # '비급여'ㆍ'급여'는 의료행위가 아니라 건강보험 급여 구분이다(`benefit_markers`).
+    for item, word in ((NONCOVERED, noncovered_word(text)), (COVERED, covered_word(text))):
+        if word is not None:
+            found[item] = word
     return found
-
-
-def _clean(text: str) -> str:
-    """NFKC로 모으고 서식 문자(Cf — 폭 없는 공백ㆍBOMㆍ소프트 하이픈 등)를 지운다.
-
-    "도(U+200B)수치료", "비(U+200B)급여"처럼 눈에 안 보이는 문자가 표지를 끊으면 (1)(2)로 계산된다.
-    """
-    normalized = unicodedata.normalize("NFKC", text)
-    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
 
 
 def carved_out_items(product: str, treatment: str) -> dict[str, str]:
     """`noncovered_items` 중 이 상품의 (1)(2)가 빼는 것만.
 
-    비급여 특약에서 '비급여'는 보장 대상 그 자체라 빼지 않는다. 급여 실손에서는
-    '비급여'만 남는다. 해외여행 기본형은 늘 빈 값이다.
+    비급여 특약에서 '비급여'는 보장 대상 그 자체라 빼지 않고 '급여'를 뺀다. 급여 실손은
+    거꾸로 '비급여'만 남는다. 해외여행 기본형은 늘 빈 값이다.
     """
     return {
         item: word
         for item, word in noncovered_items(treatment).items()
         if (product, item) in _ITEM_RULES or (product, item) in _ITEM_EXCLUDED
     }
-
-
-def _word(text: str, start: int, end: int) -> str:
-    """표지를 품은 낱말 전체 — 사유에 '주사'가 아니라 '영양주사'로 적는다."""
-    left, right = start, end
-    while left > 0 and text[left - 1].isalnum():
-        left -= 1
-    while right < len(text) and text[right].isalnum():
-        right += 1
-    word = text[left:right]
-    particle = _PARTICLE_RE.search(word)
-    # 표지 자체를 깎지는 않는다 — '엠알아이'의 '이'는 조사가 아니다.
-    if particle is not None and left + particle.start() >= end:
-        word = word[: particle.start()]
-    return word
 
 
 def _carved_out(product: str, treatment: str) -> str | None:
@@ -613,8 +572,8 @@ def why_no_rule(
     엉뚱한 것을 찾는다. 이것들은 파라미터가 없어서가 아니라 **계산하면 안 돼서**다.
 
     `treatment`는 청구의 서술과 시술명이다. 3대비급여ㆍ비급여 MRI와 급여 실손의
-    비급여는 진단코드가 아니라 의료행위ㆍ급여 구분으로 갈려 여기서만 보인다
-    (`noncovered_items`).
+    비급여, 비급여 특약의 급여는 진단코드가 아니라 의료행위ㆍ급여 구분으로 갈려 여기서만
+    보인다(`noncovered_items`).
     """
     rules = [rule for rule in RULES if rule.product == product]
     if abroad is True and rules and not any(rule.abroad_only for rule in rules):
@@ -668,11 +627,11 @@ def find_rule(
     실손은 국민건강보험 요양급여를, 비급여 특약은 국내 요양기관을 전제로 한다
     (검증 OP-7). 고르지 않는 이유는 `why_no_rule`이 말한다.
 
-    `treatment`(서술ㆍ시술명)에 3대비급여ㆍ비급여 MRI 표지가 있으면 특약1ㆍ2에서,
+    `treatment`(서술ㆍ시술명)에 3대비급여ㆍ비급여 MRI나 '급여' 표지가 있으면 특약1ㆍ2에서,
     '비급여'라는 말이 있으면 급여 실손에서 아무 규칙도 고르지 않는다. `coverage`로
     지목해도 마찬가지다 — (1)(2)를 지목하면 불확실 면책이 (2)를 가리키는 길로 같은
     버그가 새고, 항목 규칙을 지목해도 들어온 기지급액ㆍ횟수가 항목 단위인지 알 수
-    없다(notes/048ㆍ049).
+    없다(notes/048ㆍ049ㆍ050).
     """
     if why_no_rule(product, diagnosis_codes, abroad=abroad, treatment=treatment) is not None:
         return None
