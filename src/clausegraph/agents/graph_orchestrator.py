@@ -186,7 +186,8 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
     # 구현이 다른 답을 내고, compare.py의 "다르면 오케스트레이션 차이"라는 전제가
     # 깨진다(검토 MEDIUM-2).
     rule = find_rule(
-        claim.product, coverage_name, claim.diagnosis_codes, abroad=claim.treated_abroad
+        claim.product, coverage_name, claim.diagnosis_codes,
+        abroad=claim.treated_abroad, treatment=claim.treatment,
     )
     computed, step = _timed(
         "금액산정",
@@ -202,7 +203,8 @@ def _amount(state: AdjudicationState) -> AdjudicationState:
             hospital_days=claim.hospital_days,
             sum_insured=claim.sum_insured,
             no_rule_reason=why_no_rule(
-                claim.product, claim.diagnosis_codes, abroad=claim.treated_abroad
+                claim.product, claim.diagnosis_codes,
+                abroad=claim.treated_abroad, treatment=claim.treatment,
             ),
         ),
     )

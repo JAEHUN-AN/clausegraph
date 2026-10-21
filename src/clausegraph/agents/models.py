@@ -89,6 +89,15 @@ class Claim(BaseModel):
     )
     narrative: str = Field(default="", description="청구인이 적은 사유")
 
+    @property
+    def treatment(self) -> str:
+        """서술과 시술명. 면책 검증과 지급 규칙 선택이 **같은 글**을 본다.
+
+        3대비급여ㆍ비급여 MRI는 진단코드가 아니라 의료행위로 갈려 여기서만
+        보인다(notes/046). 두 단계가 다른 글을 보면 한쪽만 놓친다.
+        """
+        return f"{self.narrative} {self.procedure or ''}"
+
 
 class ClaimHistory(BaseModel):
     """그 계약·그 보장종목의 **올해 누적**. 보험사 시스템이 준다.

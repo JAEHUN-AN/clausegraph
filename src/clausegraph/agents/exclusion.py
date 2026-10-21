@@ -170,7 +170,7 @@ def screen(
     candidates = enumerate_exclusions(
         driver, claim.product, version, principal=principal
     )
-    haystack = f"{claim.narrative} {claim.procedure or ''}"
+    haystack = claim.treatment
     distinctive = _distinctive_tokens(driver, version)
 
     hits: list[ExclusionHit] = []
