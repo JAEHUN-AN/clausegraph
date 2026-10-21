@@ -21,6 +21,12 @@ class Decision(StrEnum):
     HUMAN_REVIEW = "HUMAN_REVIEW"
 
 
+# `Claim.treatment`의 조각 사이. 표지 정규식이 넘는 공백ㆍ기호(`benefit_markers`의
+# `_NONCOVERED_SEP`ㆍ`_GAP`ㆍ`_LINK`ㆍ`_JOIN`ㆍ`_NEG_GAP`)에 없고, NFKC가 바꾸지 않으며, 낱말
+# 글자(isalnum)도 아니다.
+PART_BREAK = " ¦ "
+
+
 class Claim(BaseModel):
     """청구 한 건. 사실추출이 채운다."""
 
@@ -105,8 +111,14 @@ class Claim(BaseModel):
 
         3대비급여ㆍ비급여 MRI는 진단코드가 아니라 의료행위로 갈려 여기서만
         보인다(notes/048). 두 단계가 다른 글을 보면 한쪽만 놓친다.
+
+        조각 사이에는 공백이 아니라 `PART_BREAK`를 끼운다. 표지는 띄어쓰기ㆍ기호를 끼운
+        꼴("비 급여")도 받는데, 공백으로 이으면 고쳐 쓴 서술 끝의 홀로 선 '비'와 남긴
+        '급여 본인부담금'이 '비급여'로 읽혀 표지가 가려졌다(반박 검토, notes/050). 면책
+        검증의 표현 일치는 공백 없는 낱말의 부분 문자열이라 이 기호로 달라지지 않는다.
         """
-        return " ".join((self.narrative, self.procedure or "", *self.held_treatment))
+        parts = (self.narrative, self.procedure or "", *self.held_treatment)
+        return PART_BREAK.join(part for part in parts if part)
 
 
 class ClaimHistory(BaseModel):
