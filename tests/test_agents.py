@@ -952,6 +952,21 @@ def test_no_code_means_the_coverage_is_unknown() -> None:
     assert classify_coverage(()) is None
 
 
+def test_external_cause_codes_alone_do_not_decide_the_coverage() -> None:
+    from clausegraph.agents.amount_rules import classify_coverage
+
+    # 외인 코드는 어떻게 다쳤는지만 말한다. 전에는 '교통사고로 입원'(V87)이 질병이었다
+    # (notes/047 검토 HIGH-1).
+    assert classify_coverage(("V87",)) is None
+    assert classify_coverage(("W19",)) is None
+    assert classify_coverage(("R52", "W19")) is None
+    # 상해 코드나 질병 장 코드가 있으면 그것이 정한다.
+    assert classify_coverage(("S06", "W19")) == "상해"
+    assert classify_coverage(("J18", "W19")) == "질병"
+    # 증상(R)만 있으면 전처럼 질병이다.
+    assert classify_coverage(("R51",)) == "질병"
+
+
 def test_rule_is_chosen_by_diagnosis_when_coverage_is_unstated() -> None:
     from clausegraph.agents.amount_rules import find_rule
 

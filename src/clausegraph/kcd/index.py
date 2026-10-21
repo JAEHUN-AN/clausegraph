@@ -56,6 +56,50 @@ MAX_CATEGORIES_PER_TAIL_KEY = 3
 MIN_KEY_LEN = 2
 MIN_TAIL_KEY_LEN = 3
 
+# tail 열쇠는 병명에서 **앞말을 떼어 낸** 마지막 낱말이다. 떼어 낸 앞말이 장(章)을
+# 정한 병명이면 남은 낱말만으로는 장을 모른다. 그런데도 확실 코드로 냈다.
+#
+#   서술              tail       출처 병명
+#   수술 전 마취제 투여  `마취제`   임신중 … 마취제 … 투여로 인해 발생한 산모합병증 (O29)
+#   요로감염으로 입원    `요로감염`  분만에 따른 요로감염 (O86) / 부위가 명시되지 않은 … (N39)
+#   어깨 아탈구        `아탈구`   턱관절의 … 아탈구 (K07) / 치아의 아탈구 (S03)
+#   가려움증으로 통원    `가려움증`  심인성 가려움증 (F45) / 수영자 가려움증 (B65)
+#
+# O·F·K는 면책 코드라 **확실 면책 -> 부지급**이었다(2026-10-21 실측, notes/047).
+# 색인에 남은 tail 1,634개 중 124개가 두 장 이상에 걸치고, 장이 하나여도 O장 tail은
+# '심부정맥혈전증'(임신중 …)·'개두술'(분만을 용이하게 하기 위한 …)처럼 일반 의학어다.
+# 그래서 tail 열쇠는 두 단계로 읽는다(`_read_tail`).
+#
+# 1. **O장은 병이 아니라 맥락으로 정해지는 장이다.** 임신·출산·산후기에 생긴 일이면
+#    요로감염도 폐렴도 O로 간다. O장 병명은 그 맥락을 앞말에 품고 있고, tail은 바로
+#    그 앞말을 떼어 냈다. 그래서 서술에 임신 맥락(`PREGNANCY_CONTEXT`)이 있으면 O로
+#    읽고(나머지 장은 약한 코드), 없으면 O로 읽지 않는다(O가 약한 코드).
+# 2. **그래도 장이 갈리면 정하지 않는다.** 남은 코드가 두 장 이상이면 장을 정한 것은
+#    떼어 낸 앞말이다 — 전부 약한 코드다. 장은 코드의 첫 글자로 근사한다. 실제 장과
+#    어긋나는 tail은 셋(V98·X00, C96·D47, D45·D75)이고 면책과 무관하다(검토 LOW-2).
+#
+# 버리지 않고 약한 코드로 내린다. 면책 범위에 들면 불확실 면책 -> 사람 확인이라 맥락
+# 판단이 틀려도 지급으로 새지 않는다(`BOUNDED_KEY_MAX_LEN` 설명). 대가도 그쪽이다 —
+# 맥락 낱말 없는 '자간증으로 입원', 두 장에 걸친 '치은염'(A69·K05)은 확실 면책이 아니라
+# 사람 확인이 된다. "장이 갈리면 무조건 약한 코드"로도 재 봤는데, '요로감염'의 N39까지
+# 잃고 진짜 병명 탐침 22개 중 12개가 사람 확인으로 갔다(이 규칙은 6개).
+#
+# 맥락 낱말은 O장의 범위(임신·출산·산후기)를 적은 것이다. 청구서에서 다른 뜻으로 흔한
+# 낱말은 뺐다 — '진통'(鎭痛제), '유산'(유산소·유산균, notes/046). 부분 문자열로 다른 말에
+# 걸리는 것은 앞뒤 글자로 막는다(검토 MEDIUM-1). 막지 않으면 거짓 맥락이 O를 확실로 되살리고
+# 진짜 코드(요로감염의 N39)를 약한 코드로 내린다.
+#   '분만'  — '비급여 부분만 청구', '30분만에 도착'
+#   '산모'  — '생산모델', '산모퉁이'
+#   '양수'  — '양수인'·'양수도'(계약 이전), '양수리', '양수기'
+#   '태아'  — '태아보험'(어린이보험이다). '태아절박'·'태아회전'은 낱말 자신이 맥락이다
+PREGNANCY_CHAPTER = "O"
+PREGNANCY_CONTEXT = (
+    "임신", "임산부", "임부", "산모(?!델|퉁이)", "출산", r"(?<![0-9부])(?<![0-9]\s)분만",
+    "산후", "산욕", "태반", r"태아(?!\s*보험)", "양막", "양수(?!인|도|리|기)", "입덧",
+    "제왕절개",
+)
+_PREGNANCY_RE = re.compile("|".join(PREGNANCY_CONTEXT))
+
 # 일상어 -> KCD 공식 표기.
 #
 # 코드표는 공식 병명만 담는다. 청구서에는 일상어가 적힌다 — '충치'는
@@ -212,7 +256,7 @@ class KcdIndex:
 
     def __init__(self, diseases: list[Disease]) -> None:
         self._by_code = {disease.code: disease for disease in diseases}
-        self._by_term = _build_term_index(diseases)
+        self._by_term, self._tails = _build_term_index(diseases)
         # 긴 열쇠부터 본다 — '급성 편도염'이 '편도염'보다 정확하다.
         self._terms = tuple(sorted(self._by_term, key=len, reverse=True))
 
@@ -251,9 +295,9 @@ class KcdIndex:
         return self._scan(narrative)[0]
 
     def lookup_weak(self, narrative: str) -> tuple[str, ...]:
-        """확실하지 않게 맞은 열쇠의 코드. 둘이다 — 병명 수식어가 아닌 앞말에
-        붙어 나온 짧은 열쇠, 그리고 병명 아닌 낱말(`HOMONYM_CONTEXTS`) 안에
-        든 열쇠.
+        """확실하지 않게 맞은 열쇠의 코드. 셋이다 — 병명 수식어가 아닌 앞말에
+        붙어 나온 짧은 열쇠, 병명 아닌 낱말(`HOMONYM_CONTEXTS`) 안에 든 열쇠,
+        그리고 장을 정하지 못한 tail 열쇠(`_read_tail`).
 
         `lookup`과 겹치는 코드는 뺀다. 판정에서는 불확실 면책으로만 쓴다
         (`BOUNDED_KEY_MAX_LEN` 설명).
@@ -282,8 +326,15 @@ class KcdIndex:
             if occurrence == "weak":
                 weak.extend(code for code in self._by_term[term] if code not in weak)
                 continue
+            codes = self._by_term[term]
+            if term in self._tails:
+                codes, unsure = _read_tail(codes, text)
+                weak.extend(code for code in unsure if code not in weak)
+            # 장을 못 정한 tail도 그 안의 짧은 열쇠를 가린다. 낱말은 거기 있었고 못 믿는
+            # 것은 장이다. 안 가리면 '심장질환' 안의 `장질환`(A07 장 질환)이, '심부정맥
+            # 혈전증' 안의 `부정맥`(I47)이 확실 코드로 튀어나왔다(notes/047).
             matched.append(term)
-            for code in self._by_term[term]:
+            for code in codes:
                 if code not in found:
                     found.append(code)
         return tuple(found), tuple(weak)
@@ -396,7 +447,10 @@ def category_of(code: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", code.strip().upper())[:3]
 
 
-def _build_term_index(diseases: list[Disease]) -> dict[str, tuple[str, ...]]:
+def _build_term_index(
+    diseases: list[Disease],
+) -> tuple[dict[str, tuple[str, ...]], frozenset[str]]:
+    """(열쇠 -> 3자리 분류, 그중 tail로 들어간 열쇠)."""
     full_buckets: dict[str, list[str]] = defaultdict(list)
     tail_buckets: dict[str, list[str]] = defaultdict(list)
 
@@ -421,7 +475,23 @@ def _build_term_index(diseases: list[Disease]) -> dict[str, tuple[str, ...]]:
         if len(categories) <= MAX_CATEGORIES_PER_FULL_KEY
     }
     # 전체 병명 열쇠가 이미 있으면 tail로 덮지 않는다.
+    tails: list[str] = []
     for key, categories in tail_buckets.items():
         if key not in index and len(categories) <= MAX_CATEGORIES_PER_TAIL_KEY:
             index[key] = tuple(categories)
-    return index
+            tails.append(key)
+    return index, frozenset(tails)
+
+
+def _read_tail(codes: tuple[str, ...], text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """tail 열쇠의 코드를 (확실, 약한)으로 가른다. 규칙은 `PREGNANCY_CHAPTER` 위의 설명.
+
+    맥락은 열쇠 자신도 본다 — '태반조기박리'·'임신중절'은 낱말이 곧 임신 맥락이다.
+    """
+    pregnancy = tuple(code for code in codes if code.startswith(PREGNANCY_CHAPTER))
+    others = tuple(code for code in codes if not code.startswith(PREGNANCY_CHAPTER))
+    if pregnancy and _PREGNANCY_RE.search(text):
+        return pregnancy, others
+    if len({code[0] for code in others}) > 1:
+        return (), codes
+    return others, pregnancy

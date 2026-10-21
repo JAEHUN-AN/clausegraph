@@ -564,12 +564,28 @@ def why_no_rule(
     return _carved_out(product, treatment)
 
 
+# 손상의 외부요인(V~Y)은 어떻게 다쳤는지를 말하지, 어디가 어떻게 다쳤는지는 말하지
+# 않는다. 외인 코드만 있으면 상해인지 질병인지 정하지 않는다.
+#
+# 전에는 S·T가 없으면 무조건 질병이었다. '교통사고로 입원'(V87)이 질병급여 규칙을
+# 골랐고, notes/047에서 장을 못 정한 tail의 S 코드를 약한 코드로 내리자 '낙상 후
+# 경막하출혈로 수술'(I62·P10·S06 -> 확실 W19만)이 같은 길로 질병급여가 됐다(검토 HIGH-1).
+# 상해와 질병은 연간한도가 따로라 금액이 달라진다.
+EXTERNAL_CAUSE_CHAPTERS = frozenset("VWXY")
+
+
 def classify_coverage(diagnosis_codes: tuple[str, ...]) -> str | None:
-    """진단코드로 상해인지 질병인지 가른다. 코드가 없으면 None."""
+    """진단코드로 상해인지 질병인지 가른다. 코드가 없거나 외인 코드뿐이면 None.
+
+    R(증상)·Z만 있는 청구는 전처럼 질병으로 본다 — '두통으로 통원'(R51)이 그 예다.
+    """
     if not diagnosis_codes:
         return None
-    if any(code.strip().upper()[:1] in INJURY_CHAPTERS for code in diagnosis_codes):
+    letters = {code.strip().upper()[:1] for code in diagnosis_codes}
+    if letters & INJURY_CHAPTERS:
         return "상해"
+    if not letters & DISEASE_CHAPTERS and letters & EXTERNAL_CAUSE_CHAPTERS:
+        return None
     return "질병"
 
 
