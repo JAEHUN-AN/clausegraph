@@ -29,6 +29,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 
 from ..graph.schema import article_uid
@@ -293,6 +295,10 @@ RULES: tuple[AmountRule, ...] = (
     # 3대비급여와 비급여 MRI는 제3조 <표1>이 **항목마다** 공제와 한도를
     # 따로 정한다. 그래서 보장종목 하나로 묶지 않고 항목별 규칙으로 넣는다.
     #
+    # `find_rule`은 이 규칙을 **자동으로 고르지 않는다.** 청구에 이 항목의
+    # 표지가 있으면 (1)(2)도 고르지 않고 사람에게 넘긴다(`noncovered_items`,
+    # notes/048).
+    #
     # 이 항목들은 (1)(2)와 두 가지가 다르다.
     #   - 공제가 "1회당"이라 입원에도 붙는다.
     #   - 조문이 비율을 걸지 않는다("공제금액을 뺀 금액을 … 보상합니다").
@@ -380,6 +386,136 @@ RULES: tuple[AmountRule, ...] = (
 _BY_KEY = {(rule.product, rule.coverage): rule for rule in RULES}
 
 
+# --- (1)(2)가 빼고 보상하는 의료행위 — 3대비급여ㆍ비급여 MRI ---
+#
+#   특약1 제3조 (1)(2) ① "비급여의료비(3대비급여는 제외합니다)"
+#   특약2 제3조 (1)(2) ① "비급여의료비(비급여 자기공명영상진단은 제외합니다)"
+#
+# 그래서 청구에 이 의료행위가 있으면 (1)(2) 규칙은 **틀린 규칙**이다. 진단코드는
+# 상해/질병만 가를 뿐 의료행위를 모른다 — 요통(M54.5) 도수치료 청구를
+# (2)질병비급여(연 5천만원, 통원 1회 20만원)로 계산해, 항목 한도 350만원을 이미
+# 다 쓴 계약에 7만원을 지급했다(notes/048).
+#
+# 항목 규칙도 자동으로 고르지 않는다(notes/048).
+#   - 기지급액ㆍ횟수(`ClaimHistory`)는 보장종목 단위로 들어온다. 그 값이 항목
+#     단위인지 알 수 없다 — 모르는 값을 항목 누적으로 읽으면 한도가 틀린다.
+#   - 청구액이 한 덩어리다. 같은 통원에서 도수치료와 다른 비급여를 받았으면
+#     항목 몫을 나눌 수 없다.
+#   - 이학요법은 "최초 10회 보장하고, 이후 … 증상의 개선, 병변호전 등이 …
+#     확인된 경우에 한하여 10회 단위로" 보상한다. 확인은 사람의 일이다.
+MUSCULOSKELETAL = "근골격계 이학요법ㆍ체외충격파치료"
+INJECTION = "주사료"
+MRI = "자기공명영상진단"
+
+# 특약1 제2조가 이학요법의 예로 든 것 — "FIMS(기능적근육내 자극치료), 신장분사치료,
+# 도수치료, 증식치료, 비침습적 무통증 신호요법 등" — 과 현장 표기("도수 10회",
+# "충격파", IMS, ESWT, 인대강화주사). 체외충격파쇄석술(결석)은 제2조의
+# 체외충격파치료("건(힘줄) 및 뼈의 치유 과정을 자극")가 아니다. '빈도수'의 도수는
+# 뺀다. "안경 도수" 같은 오탐은 사람에게 가는 쪽이라 둔다.
+_MUSCULOSKELETAL_RE = re.compile(
+    r"(?<!빈)도수|충격파(?!\s*쇄석)|증식\s*치료|프롤로|인대\s*강화|이학\s*요법"
+    r"|(?<![A-Z])F?IMS(?![A-Z])|ESWT|근육\s*내\s*자극|신장\s*분사|무통증\s*신호",
+    re.IGNORECASE,
+)
+_MRI_RE = re.compile(r"자기\s*공명|MR(?:I|A|CP)|엠\s*알\s*아이", re.IGNORECASE)
+# 주사ㆍ수액(링거ㆍ링게르ㆍ닝겔).
+#
+# 항암제ㆍ항생제ㆍ희귀의약품 주사는 특약1 제3조 (3) ②가 (1)(2)로 돌려보내고 특약2
+# 제4조도 면책에서 빼지만, **그 갈래를 서술의 낱말로 가르지 않는다.** 처음엔
+# "항암주사"라고 적힌 자리를 표지에서 뺐는데, "싸이모신 항암주사"처럼 항암으로
+# 불려도 약관의 항암제(종양용약)가 아닌 주사가 흔하다 — 주사료 한도를 다 쓴 계약에
+# 20만원이 나갔다(반박 검증, notes/048). 약제가 무엇인지는 사람이 본다.
+_INJECTION_RE = re.compile(r"주사|수액|[링닝][거겔게]")
+_INJECTION_NOTE = "항암제ㆍ항생제ㆍ희귀의약품 주사면 (1)(2)에서 보상한다 — 약제 확인 필요"
+
+# 상품마다 그 항목을 (1)(2) 대신 어디서 다루는가. 급여 실손과 해외여행
+# 기본형에는 이 구분이 없다 — 급여 MRI는 급여 의료비다.
+_ITEM_RULES: dict[tuple[str, str], str] = {
+    (SEVERE, MUSCULOSKELETAL): "(3)3대비급여-근골격계이학요법치료ㆍ체외충격파치료",
+    (SEVERE, INJECTION): "(3)3대비급여-주사료",
+    (SEVERE, MRI): "(3)3대비급여-자기공명영상진단",
+    (MILD, MRI): "(3)비급여 자기공명영상진단",
+}
+# 특약2 제4조 — "근골격계 이학요법 치료행위에 수반된 일체의 의료비", "체외충격파
+# 치료행위에 수반된 일체의 의료비", "항암제, 항생제, 희귀의약품을 제외한
+# 주사치료시 사용된 행위, 약제 및 치료재료와 관련하여 소요된 비용".
+# 면책 검증은 서술 낱말 겹침으로만 이것을 찾아 놓칠 수 있다 — 2026-10-21 실측에서
+# 특약2 도수치료 청구가 면책 0건으로 5만원 지급됐다.
+_ITEM_EXCLUDED: frozenset[tuple[str, str]] = frozenset({(MILD, MUSCULOSKELETAL), (MILD, INJECTION)})
+
+
+_ITEM_PATTERNS = (
+    (MUSCULOSKELETAL, _MUSCULOSKELETAL_RE),
+    (INJECTION, _INJECTION_RE),
+    (MRI, _MRI_RE),
+)
+
+# 사유에 낱말을 적을 때 떼는 조사 — '도수치료를'이 아니라 '도수치료'.
+_PARTICLE_RE = re.compile(r"(?:으로|에서|에게|까지|부터|를|을|이|가|은|는|와|과|도|만|에|의|로)$")
+
+
+def noncovered_items(treatment: str) -> dict[str, str]:
+    """서술ㆍ시술명에 나온 3대비급여ㆍ비급여 MRI 항목과, 그렇게 읽은 낱말."""
+    text = unicodedata.normalize("NFKC", treatment)
+    found: dict[str, str] = {}
+    for item, pattern in _ITEM_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            found[item] = _word(text, *match.span())
+    return found
+
+
+def carved_out_items(product: str, treatment: str) -> dict[str, str]:
+    """`noncovered_items` 중 이 상품의 (1)(2)가 빼는 것만. 급여 실손 등은 늘 빈 값이다."""
+    return {
+        item: word
+        for item, word in noncovered_items(treatment).items()
+        if (product, item) in _ITEM_RULES or (product, item) in _ITEM_EXCLUDED
+    }
+
+
+def _word(text: str, start: int, end: int) -> str:
+    """표지를 품은 낱말 전체 — 사유에 '주사'가 아니라 '영양주사'로 적는다."""
+    left, right = start, end
+    while left > 0 and text[left - 1].isalnum():
+        left -= 1
+    while right < len(text) and text[right].isalnum():
+        right += 1
+    word = text[left:right]
+    particle = _PARTICLE_RE.search(word)
+    # 표지 자체를 깎지는 않는다 — '엠알아이'의 '이'는 조사가 아니다.
+    if particle is not None and left + particle.start() >= end:
+        word = word[: particle.start()]
+    return word
+
+
+def _carved_out(product: str, treatment: str) -> str | None:
+    """청구에 (1)(2)가 빼는 항목이 있으면 그 설명. 없으면 None."""
+    parts: list[str] = []
+    for item, word in carved_out_items(product, treatment).items():
+        coverage = _ITEM_RULES.get((product, item))
+        if coverage is not None:
+            parts.append(
+                f"'{word}' — (1)(2)가 빼는 {item} 항목({coverage}{_limit_text(product, coverage)})"
+                "이라 항목별 의료비ㆍ기지급액ㆍ횟수가 필요하다"
+            )
+        else:
+            parts.append(f"'{word}' — 제4조가 보상하지 않는 {item} 비용일 수 있다")
+        if item == INJECTION:
+            parts[-1] += f"({_INJECTION_NOTE})"
+    if not parts:
+        return None
+    return f"{'; '.join(parts)} — (1)(2) 산식으로 계산하지 않는다 — 심사자 확인이 필요하다"
+
+
+def _limit_text(product: str, coverage: str) -> str:
+    rule = _BY_KEY[(product, coverage)]
+    limits = [f"연 {rule.annual_limit:,}원"] if rule.annual_limit is not None else []
+    if rule.annual_visit_limit:
+        limits.append(f"{rule.annual_visit_limit}회")
+    return f", {'ㆍ'.join(limits)} 한도" if limits else ""
+
+
 # KCD 챕터 S·T는 손상·중독, 즉 상해다. 나머지는 질병으로 본다.
 # 보장종목이 상해급여/질병급여로 갈리므로 이 구분이 곧 파라미터 선택이다.
 INJURY_CHAPTERS = frozenset("ST")
@@ -403,12 +539,19 @@ def coverage_kinds(diagnosis_codes: tuple[str, ...]) -> frozenset[str]:
 
 
 def why_no_rule(
-    product: str, diagnosis_codes: tuple[str, ...], *, abroad: bool | None
+    product: str,
+    diagnosis_codes: tuple[str, ...],
+    *,
+    abroad: bool | None,
+    treatment: str = "",
 ) -> str | None:
     """규칙을 일부러 고르지 않는 경우의 이유. 해당 없으면 None.
 
     `find_rule`이 None을 돌려주는 이유가 "파라미터가 없다"뿐이면 심사자가
-    엉뚱한 것을 찾는다. 이 둘은 파라미터가 없어서가 아니라 **계산하면 안 돼서**다.
+    엉뚱한 것을 찾는다. 이것들은 파라미터가 없어서가 아니라 **계산하면 안 돼서**다.
+
+    `treatment`는 청구의 서술과 시술명이다. 3대비급여ㆍ비급여 MRI는 진단코드가
+    아니라 의료행위로 갈려 여기서만 보인다(`noncovered_items`).
     """
     rules = [rule for rule in RULES if rule.product == product]
     if abroad is True and rules and not any(rule.abroad_only for rule in rules):
@@ -418,7 +561,7 @@ def why_no_rule(
             "상해와 질병 진단이 섞여 보장종목별 보험가입금액을 나눌 수 없다"
             " — 보장종목별 의료비 구분이 필요하다"
         )
-    return None
+    return _carved_out(product, treatment)
 
 
 def classify_coverage(diagnosis_codes: tuple[str, ...]) -> str | None:
@@ -436,6 +579,7 @@ def find_rule(
     diagnosis_codes: tuple[str, ...] = (),
     *,
     abroad: bool | None = None,
+    treatment: str = "",
 ) -> AmountRule | None:
     """상품·보장종목의 파라미터. 없으면 None — 계산하지 않는다.
 
@@ -444,8 +588,13 @@ def find_rule(
     100%를 주게 된다. 거꾸로 **해외 치료에 국내 규칙도 고르지 않는다** — 급여
     실손은 국민건강보험 요양급여를, 비급여 특약은 국내 요양기관을 전제로 한다
     (검증 OP-7). 고르지 않는 이유는 `why_no_rule`이 말한다.
+
+    `treatment`(서술ㆍ시술명)에 3대비급여ㆍ비급여 MRI 표지가 있으면 특약1ㆍ2에서
+    아무 규칙도 고르지 않는다. `coverage`로 지목해도 마찬가지다 — (1)(2)를 지목하면
+    불확실 면책이 (2)를 가리키는 길로 같은 버그가 새고, 항목 규칙을 지목해도 들어온
+    기지급액ㆍ횟수가 항목 단위인지 알 수 없다(notes/048).
     """
-    if why_no_rule(product, diagnosis_codes, abroad=abroad) is not None:
+    if why_no_rule(product, diagnosis_codes, abroad=abroad, treatment=treatment) is not None:
         return None
 
     def usable(rule: AmountRule) -> bool:

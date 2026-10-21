@@ -88,6 +88,24 @@ class Claim(BaseModel):
         description="앞단이 넘긴 원화 청구액. 재심사에서 서술을 새로 받아도 남는다",
     )
     narrative: str = Field(default="", description="청구인이 적은 사유")
+    held_treatment: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "앞 판의 서술에 있던 3대비급여ㆍ비급여 MRI 표지 낱말. 재심사에서 서술을"
+            " 고쳐 말해도 남는다 — 표지가 사라지면 (1)(2) 산식으로 지급액이 나가는데,"
+            " 그 정정이 맞는지는 서술만으로 알 수 없다(notes/048)"
+        ),
+    )
+
+    @property
+    def treatment(self) -> str:
+        """서술과 시술명, 그리고 앞 판에서 남긴 표지. 면책 검증과 지급 규칙 선택이
+        **같은 글**을 본다.
+
+        3대비급여ㆍ비급여 MRI는 진단코드가 아니라 의료행위로 갈려 여기서만
+        보인다(notes/048). 두 단계가 다른 글을 보면 한쪽만 놓친다.
+        """
+        return " ".join((self.narrative, self.procedure or "", *self.held_treatment))
 
 
 class ClaimHistory(BaseModel):
