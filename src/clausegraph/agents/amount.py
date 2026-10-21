@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 from .amount_rules import AmountRule
 from .models import ClaimHistory
@@ -36,6 +37,13 @@ from .models import ClaimHistory
 # 급여 통원 공제의 정액이 커지는 의료기관. 순서가 중요하다 — "종합병원"이
 # "병원"을 포함하므로 큰 쪽을 먼저 본다.
 TERTIARY_INSTITUTIONS = ("상급종합병원", "종합병원", "전문요양기관")
+
+# 특약2 의원급 입원 한도가 걸리지 않는 의료기관 — 약관이 빼는 것은 "「의료법」 제3조의3에
+# 의한 종합병원"뿐이다(상급종합병원은 종합병원 중에서 지정한다). 위의 공제표 목록을 다시
+# 쓰면 안 된다. 전문요양기관은 건강보험법의 지정이라 병원급일 수 있다.
+CLINIC_CAP_EXEMPT = ("상급종합병원", "종합병원")
+# 이름만으로는 종합병원인지 알 수 없는 값. 한도가 걸릴 금액이면 상한으로 둔다.
+CLINIC_CAP_UNDECIDABLE = ("전문요양기관",)
 
 
 @dataclass(frozen=True)
@@ -151,12 +159,16 @@ def compute(
     #       비급여 의료비는 1회당 300만원을 한도로 합니다"
     #
     #      의료기관 종류를 모르면 한도를 걸지 못하고, 안 거는 쪽이 과다지급이다.
+    #      전문요양기관도 같다 — 종합병원인지 이름으로는 모른다.
     clinic_cap = rule.inpatient_clinic_cap if inpatient else None
     if clinic_cap is not None:
         if institution is None:
             if "의료기관 종류" not in missing:
                 missing.append("의료기관 종류")
-        elif not _is_tertiary(institution) and payable > clinic_cap:
+        elif _is_undecidable_for_clinic_cap(institution):
+            if payable > clinic_cap:
+                missing.append(f"{institution}의 종합병원 여부")
+        elif not _is_cap_exempt(institution) and payable > clinic_cap:
             steps.append(f"의원급 입원 1회 한도 {clinic_cap:,}원으로 제한")
             payable = clinic_cap
 
@@ -269,8 +281,12 @@ def compute(
     )
 
 
-def _is_tertiary(institution: str) -> bool:
-    return any(name in institution for name in TERTIARY_INSTITUTIONS)
+def _is_cap_exempt(institution: str) -> bool:
+    return any(name in institution for name in CLINIC_CAP_EXEMPT)
+
+
+def _is_undecidable_for_clinic_cap(institution: str) -> bool:
+    return any(name in institution for name in CLINIC_CAP_UNDECIDABLE)
 
 
 def _room_charge(rule: AmountRule, room_charge: int, hospital_days: int) -> tuple[int, str]:
@@ -314,13 +330,19 @@ def _outpatient_deductible(
         elif any(name in institution for name in TERTIARY_INSTITUTIONS):
             flat = tertiary
 
-    terms = [flat, int(claimed_amount * (rule.outpatient_deductible_rate or 0))]
+    terms = [flat, _portion(claimed_amount, rule.outpatient_deductible_rate or 0)]
 
     # 본인부담률 항 — 약관에 없는 값이라 청구가 들고 와야 한다.
     if rule.outpatient_deductible_uses_copay_rate:
         if copay_rate is None:
             missing.append("건강보험 본인부담률")
         else:
-            terms.append(int(claimed_amount * copay_rate))
+            terms.append(_portion(claimed_amount, copay_rate))
 
     return max(terms), missing
+
+
+def _portion(amount: int, rate: float) -> int:
+    """금액 × 비율, 원 미만 절사. 부동소수로 곱하면 100,000 × 0.29가 28,999.999…라
+    공제가 1원 덜 빠진다(검토 PR #13). 비율을 적힌 그대로의 분수로 바꿔 곱한다."""
+    return int(Fraction(amount) * Fraction(str(rate)))
