@@ -103,6 +103,41 @@ HOMONYM_KEYS = frozenset({"주사", "유착", "가스"})
 #   '복부유착 박리술'이 치과치료(K00∼K08) **확실 면책**으로 부지급됐다(검증 HIGH-1).
 # `가스`(T59 가스의 독성 효과) — '복부가스'(고창)는 질병인데 T가 상해 규칙을 골랐다.
 
+# 병명 열쇠를 **품은** 병명 아닌 낱말. 이 범위와 겹쳐 맞은 열쇠는 **약한 코드**다.
+#
+# 긴 열쇠는 부분 일치만 보므로 앞뒤에 무엇이 붙었는지 모른다. 병명이 아닌 낱말이
+# 병명을 품으면 그대로 확실 코드가 됐다(2026-10-21 반박 검증, notes/046).
+#   '세계자연유산 관광 중 넘어져'  ->  `자연유산`(O03)
+#   '세계 유산 탐방 중 넘어짐'     ->  `유산`(O03·O05·O06) — 띄어 써서 앞 글자 검사를 지난다
+#   '유산소 운동 중 무릎 통증'     ->  `유산` — 有酸素
+#   '유산균 복용 후 설사'          ->  `유산` — 乳酸菌
+#   '유산슬 먹고 식중독'           ->  `유산` — 중식 요리
+#   '장유착방지제 도포'            ->  `장유착`(K56) — 짧은 `유착`은 HOMONYM_KEYS가 막는다
+# O03은 임신·출산(O00∼O99) 면책 코드라 **확실 면책 -> 부지급**이었다.
+#
+# HOMONYM_KEYS처럼 열쇠를 버리지 않는 이유 — `자연유산`·`유산`은 진짜 병명이다.
+# 문맥 판단이 틀려도 약한 코드는 지급으로 새지 않고 불확실 면책으로 사람에게 간다.
+#   - '자연유산'은 2024년부터 국가유산의 한 갈래(문화·자연·무형유산)라 앞말 없이도
+#     '자연유산 탐방'처럼 쓴다. 의료 문맥(후·으로·진단·소파술)과 겹치지 않는 뒷말만 둔다.
+#   - 띄어 쓴 앞말에 '자연'은 넣지 않는다 — '자연 유산 후 소파술'은 진짜 병명이다.
+#   - '유산소'는 **뒤에 올 말을 정해 둔다.** '유산 소파술'·'유산 소견'·'유산 소독'을 붙여
+#     쓰면 글자가 '유산소…'라, 뒷말을 막는 쪽으로 두면 진짜 병명이 약해진다(검토 MEDIUM-1).
+HERITAGE_VISITS = (
+    "탐방", "관광", "답사", "명소", "여행", "트레킹", "방문", "지구", "공원", "지역",
+    "등재", "유적", "견학", "체험", "투어", "관람",
+)
+AEROBIC_TAILS = (
+    "운동", "성", "능력", "훈련", "활동", "를", "가", "는", "도", "에", "로", "와", "만",
+)
+HOMONYM_CONTEXTS = (
+    re.compile(r"(?:세계|국가|유네스코|지정)\s*자연\s*유산"),
+    re.compile(rf"자연\s*유산\s*(?:{'|'.join(HERITAGE_VISITS)})"),
+    re.compile(r"(?:문화|세계|국가|무형|역사)\s*유산"),
+    re.compile(r"유산(?:균|슬)"),
+    re.compile(rf"유산소(?:{'|'.join(AEROBIC_TAILS)}|(?![가-힣]))"),
+    re.compile(r"유착\s*(?:방지|예방|차단)"),
+)
+
 # 이 길이 이하의 열쇠는 앞에 한글이 붙어 있으면, 그 한글이 **병명 수식어로
 # 끝날 때만** 확실한 코드로 친다. 그 밖에 붙어 나온 것은 **약한 코드**다.
 #
@@ -216,7 +251,9 @@ class KcdIndex:
         return self._scan(narrative)[0]
 
     def lookup_weak(self, narrative: str) -> tuple[str, ...]:
-        """병명 수식어가 아닌 앞말에 붙어 나온 짧은 열쇠의 코드.
+        """확실하지 않게 맞은 열쇠의 코드. 둘이다 — 병명 수식어가 아닌 앞말에
+        붙어 나온 짧은 열쇠, 그리고 병명 아닌 낱말(`HOMONYM_CONTEXTS`) 안에
+        든 열쇠.
 
         `lookup`과 겹치는 코드는 뺀다. 판정에서는 불확실 면책으로만 쓴다
         (`BOUNDED_KEY_MAX_LEN` 설명).
@@ -233,8 +270,9 @@ class KcdIndex:
         found: list[str] = []
         weak: list[str] = []
         matched: list[str] = []
+        shadows = _homonym_spans(text)
         for term in self._terms:
-            occurrence = _occurrence(term, text)
+            occurrence = _occurrence(term, text, shadows)
             if occurrence is None:
                 continue
             # 이미 맞은 더 긴 열쇠의 부분 문자열이면 건너뛴다 —
@@ -251,28 +289,44 @@ class KcdIndex:
         return tuple(found), tuple(weak)
 
 
-def _occurrence(term: str, text: str) -> str | None:
+def _occurrence(
+    term: str, text: str, shadows: tuple[tuple[int, int], ...] = ()
+) -> str | None:
     """열쇠가 서술에 어떻게 나타나는가 — "strong", "weak", 없으면 None.
 
+    병명 아닌 낱말(`shadows`, `HOMONYM_CONTEXTS`)과 겹친 출현은 weak다.
     짧은 열쇠는 앞에 붙은 한글이 병명 수식어(`DISEASE_PREFIXES`)로 끝나거나
     아무것도 안 붙었을 때 strong이다. 한 번이라도 strong으로 나타나면 strong이다.
     """
-    if len(term) > BOUNDED_KEY_MAX_LEN:
-        return "strong" if term in text else None
+    # 열쇠 2만여 개 대부분은 안 맞는다. `in`이 `find` 호출보다 싸다.
+    if term not in text:
+        return None
     seen = None
     start = text.find(term)
     while start != -1:
-        glued = _glued_prefix(text, start)
-        if not glued or glued.endswith(DISEASE_PREFIXES):
+        if _shadowed(start, start + len(term), shadows):
+            seen = "weak"
+        elif len(term) > BOUNDED_KEY_MAX_LEN:
             return "strong"
-        seen = "weak"
+        else:
+            glued = _glued_prefix(text, start)
+            if not glued or glued.endswith(DISEASE_PREFIXES):
+                return "strong"
+            seen = "weak"
         start = text.find(term, start + 1)
     return seen
 
 
-def _occurs(term: str, text: str) -> bool:
-    """확실한 코드로 칠 만큼 나타나는가."""
-    return _occurrence(term, text) == "strong"
+def _homonym_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """서술에서 병명 아닌 낱말이 차지한 범위."""
+    return tuple(
+        match.span() for pattern in HOMONYM_CONTEXTS for match in pattern.finditer(text)
+    )
+
+
+def _shadowed(start: int, end: int, shadows: tuple[tuple[int, int], ...]) -> bool:
+    """[start, end)가 병명 아닌 낱말의 범위와 겹치는가."""
+    return any(start < finish and begin < end for begin, finish in shadows)
 
 
 def _glued_prefix(text: str, start: int) -> str:
