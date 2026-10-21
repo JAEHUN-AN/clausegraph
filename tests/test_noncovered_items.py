@@ -307,6 +307,84 @@ def test_a_follow_up_about_mri_on_a_benefit_claim_is_not_new() -> None:
     assert "시술" not in detect_new_facts("MRI도 찍었는데 왜 이 금액이죠?", claim)
 
 
+# --- 재심사: 서술을 고쳐 말해도 표지는 남는다 ---
+#
+# 반박 검증: 도수치료 청구(HUMAN_REVIEW)를 서술만 고쳐 다시 심사하면 표지가 사라져
+# PARTIAL 84,000원이 나왔다. 서류 코드(`stated_codes`)를 서술로 지우지 못하게 한 것과
+# 같은 이유로 막는다 — 정정이 맞는지는 서술만으로 알 수 없다.
+
+CORRECTED = "2026-08-10 허리 통증 통원, 진료비 12만원으로 정정"
+
+
+def _revise(claim, narrative: str = "", **kwargs):
+    pytest.importorskip("mcp", reason="mcp extra가 없으면 건너뛴다")
+    from clausegraph.mcp_server.server import _revise as revise
+
+    return revise(claim, -1, -1, -1, -1, narrative, **kwargs)
+
+
+def test_a_corrected_narrative_keeps_the_earlier_marker() -> None:
+    revised = _revise(_claim(SEVERE, REPRO_NARRATIVE), CORRECTED)
+
+    assert "도수치료" not in revised.narrative
+    assert revised.held_treatment == ("도수치료",)
+    assert find_rule(SEVERE, None, revised.diagnosis_codes, treatment=revised.treatment) is None
+
+
+def test_a_corrected_narrative_is_still_held_end_to_end(monkeypatch) -> None:
+    revised = _revise(_claim(SEVERE, REPRO_NARRATIVE), CORRECTED)
+    result = _adjudicate(monkeypatch, revised)
+
+    assert result.decision is Decision.HUMAN_REVIEW
+    assert "'도수치료'" in result.reason
+
+
+def test_the_held_marker_survives_later_revisions() -> None:
+    once = _revise(_claim(SEVERE, REPRO_NARRATIVE), CORRECTED)
+    by_amount = _revise(once, claimed_amount=150_000)
+    by_narrative = _revise(once, "2026-08-10 허리 통증 통원, 진료비 13만원")
+
+    assert by_amount.held_treatment == ("도수치료",)
+    assert by_narrative.held_treatment == ("도수치료",)
+
+
+def test_a_narrative_that_still_names_the_procedure_holds_nothing_extra() -> None:
+    revised = _revise(_claim(SEVERE, REPRO_NARRATIVE), "2026-08-10 도수치료 통원, 진료비 12만원")
+
+    assert revised.held_treatment == ()
+
+
+def test_a_new_marker_in_the_correction_is_read_and_the_old_one_kept() -> None:
+    revised = _revise(_claim(SEVERE, REPRO_NARRATIVE), "2026-08-10 무릎 MRI 통원, 진료비 60만원")
+
+    assert revised.held_treatment == ("도수치료",)
+    assert set(carved_out_items(SEVERE, revised.treatment)) == {MUSCULOSKELETAL, MRI}
+
+
+def test_products_without_item_rules_hold_nothing() -> None:
+    claim = _claim(BENEFIT, "2026-08-10 허리 MRI 통원, 진료비 10만원")
+
+    assert _revise(claim, CORRECTED).held_treatment == ()
+
+
+def test_revise_claim_says_which_marker_it_kept(monkeypatch) -> None:
+    pytest.importorskip("mcp", reason="mcp extra가 없으면 건너뛴다")
+    from clausegraph.agents import orchestrator
+    from clausegraph.mcp_server import server
+
+    _fake_graph(monkeypatch, orchestrator)
+    monkeypatch.setattr(server, "driver", lambda: None)
+    monkeypatch.setattr(server, "principal", Principal.everything)
+    claim = _claim(SEVERE, REPRO_NARRATIVE)
+    first = orchestrator.adjudicate(None, claim, principal=Principal.everything())
+    session = server.STORE.open(claim, first, "첫 판정")
+
+    reply = server.revise_claim(session.session_id, narrative=CORRECTED)
+
+    assert "판정 HUMAN_REVIEW   지급액 0원" in reply
+    assert "앞 서술의 표지 '도수치료'" in reply
+
+
 # --- 항목 이름이 규칙과 어긋나지 않는다 ---
 
 
