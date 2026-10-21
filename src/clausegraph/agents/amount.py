@@ -167,7 +167,7 @@ def compute(
                 missing.append("의료기관 종류")
         elif _is_undecidable_for_clinic_cap(institution):
             if payable > clinic_cap:
-                missing.append(f"종합병원 여부({institution})")
+                missing.append(f"{institution}의 종합병원 여부")
         elif not _is_cap_exempt(institution) and payable > clinic_cap:
             steps.append(f"의원급 입원 1회 한도 {clinic_cap:,}원으로 제한")
             payable = clinic_cap

@@ -42,14 +42,34 @@ _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
 
 # 영수증에서 오는 두 값(notes/045). 고쳐 말하면 통원 공제와 의원급 입원 한도가 바뀐다.
+#
 # 긴 이름을 먼저 본다 — "상급종합병원" 안의 "종합병원", "한의원" 안의 "의원"을 따로 세면
-# 이미 아는 값을 되물은 말이 새 사실이 된다.
+# 이미 아는 값을 되물은 말이 새 사실이 된다. 띄어 쓴 "종합 병원"은 낱말 사이에서만 받는다.
+# 공백을 통째로 지우면 "사고의 원인"이 의원, "병원 급여"가 병원급이 된다(검토 PR #13).
+# "의원"은 앞이 한글이면 세지 않는다 — 국회의원·병의원. 다만 "내과의원"처럼 진료과 뒤는 센다.
+_INSTITUTION_SPLITS = re.compile(r"(?<=.)(?=병원|종합|요양|기관)|(?<=치과)(?=의원)")
+
+
+def _institution_pattern(name: str) -> str:
+    parts = _INSTITUTION_SPLITS.split(name)
+    pattern = r"\s*".join(re.escape(part) for part in parts)
+    if name.startswith("의원"):
+        pattern = rf"(?:(?<![가-힣])|(?<=과)){pattern}"
+    return pattern
+
+
 _INSTITUTION_RE = re.compile(
-    "|".join(re.escape(name) for name in sorted(INSTITUTIONS, key=len, reverse=True))
+    "|".join(
+        _institution_pattern(name) for name in sorted(INSTITUTIONS, key=len, reverse=True)
+    )
 )
-_COPAY_WORDS = ("본인부담률", "본인부담율", "부담률", "부담율")
-_PERCENT_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s*(?:%|퍼센트|프로)")
-_RATIO_RE = re.compile(r"(?<![\d.,])(0\.\d+|1\.0+)(?![\d.,])")
+# 본인부담률은 "본인부담"·"환자부담" 바로 뒤에 온 비율만 읽는다. "60%"만으로는 보상비율과
+# 가르지 못하고, "보상비율 80%"·"공단부담률 70%"·"자기부담률 20%"를 함께 말하는 질문이 흔하다.
+# 단위 없는 정수("본인부담금 13,500원")는 비율로 읽지 않는다.
+_COPAY_RATE_RE = re.compile(
+    r"(?:본인|환자)\s*부담[^\d]{0,10}?"
+    r"(?:(?P<percent>\d{1,3}(?:\.\d+)?)\s*(?:%|퍼센트|프로)|(?P<ratio>0\.\d+|1\.0+)(?![\d.,]))"
+)
 
 # 올해 누적을 말하는 표현. 금액과 함께 와야 새 사실로 본다.
 _HISTORY_WORDS = ("이미 받", "기지급", "작년", "올해", "지난번", "전에 받", "누적")
@@ -107,9 +127,15 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
     if carved_out_items(claim.product, question).keys() - known_items.keys():
         found.append("시술")
 
-    # "사실 상급종합병원이었어요" — 영수증 값이 바뀌면 확정 지급액도 바뀐다. 해외 치료는
-    # 기관 종류를 읽지 않으므로(`extract_claim`) 세지 않는다.
-    if claim.treated_abroad is not True and _institutions_in(question) - {claim.institution}:
+    # "사실 상급종합병원이었어요" — 영수증 값이 바뀌면 확정 지급액도 바뀐다. 영수증 값을
+    # 받은 청구에서만 센다. 분쟁 서술에는 "요양병원에 입원했는데"처럼 기관 이름이 지나가듯
+    # 나오고, 값이 없던 청구의 금액은 이미 상한이라 낡은 확정액을 설명할 일이 없다.
+    # 해외 치료는 기관 종류를 읽지 않으므로(`extract_claim`) 세지 않는다.
+    if (
+        claim.institution is not None
+        and claim.treated_abroad is not True
+        and _institutions_in(question) - {claim.institution}
+    ):
         found.append("요양기관 종류")
 
     if any(_differs(rate, claim.copay_rate) for rate in _copay_rates_in(question)):
@@ -119,18 +145,18 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
 
 
 def _institutions_in(question: str) -> set[str]:
-    """말에 나온 요양기관 종류를 영수증 파서와 같은 이름으로. "종합 병원"도 읽는다."""
-    squeezed = re.sub(r"\s+", "", question)
-    return {INSTITUTIONS[name] for name in _INSTITUTION_RE.findall(squeezed)}
+    """말에 나온 요양기관 종류를 영수증 파서와 같은 이름으로."""
+    return {
+        INSTITUTIONS[re.sub(r"\s+", "", match)] for match in _INSTITUTION_RE.findall(question)
+    }
 
 
 def _copay_rates_in(question: str) -> tuple[float, ...]:
-    """본인부담률을 말할 때만 비율을 읽는다. "60%"만으로는 보상비율과 가르지 못한다."""
-    if not any(word in question for word in _COPAY_WORDS):
-        return ()
-    percents = (float(value) / 100 for value in _PERCENT_RE.findall(question))
-    ratios = (float(value) for value in _RATIO_RE.findall(question))
-    return tuple(rate for rate in (*percents, *ratios) if 0 < rate <= 1)
+    rates = (
+        float(match["percent"]) / 100 if match["percent"] else float(match["ratio"])
+        for match in _COPAY_RATE_RE.finditer(question)
+    )
+    return tuple(rate for rate in rates if 0 < rate <= 1)
 
 
 def _differs(rate: float, known: float | None) -> bool:

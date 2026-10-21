@@ -228,6 +228,11 @@ def _receipt_claim():
     ("종합 병원이었어요. 금액이 왜 이건가요?", "요양기관 종류"),
     ("본인부담률이 60%였어요. 지급액 얼마죠?", "본인부담률"),
     ("본인부담률 0.6이에요 얼마 나와요", "본인부담률"),
+    ("본인부담 45%였어요. 지급액 얼마예요?", "본인부담률"),
+    ("본인 부담 비율이 45%예요", "본인부담률"),
+    ("환자부담 0.45였는데 얼마죠?", "본인부담률"),
+    ("상급 종합 병원이었어요", "요양기관 종류"),
+    ("내과의원이 아니라 한의원이었어요", "요양기관 종류"),
 ])
 def test_corrected_receipt_values_are_new_facts(question, fact) -> None:
     # 고쳐 말한 영수증 값을 금액 질문으로 읽으면, 앞 판의 더 큰 확정 지급액을 그대로
@@ -242,8 +247,19 @@ def test_corrected_receipt_values_are_new_facts(question, fact) -> None:
 
 @pytest.mark.parametrize("question", [
     "의원에서 받은 건데 왜 이 금액이죠?",
+    "의원급인데 금액이 왜 이건가요?",
+    "내과의원에서 받았는데 얼마예요?",
     "본인부담률 30%인데 공제가 왜 이렇게 커요?",
     "본인부담률이 뭐예요?",
+    # 이미 아는 값이거나, 기관·본인부담률이 아닌 말 — 공백을 지우면 우연히 이름이 생긴다.
+    "금액 차이의 원인이 뭔가요?",
+    "병원 급여 항목인데 왜 이 금액이죠?",
+    "국회의원이 소개한 건데 왜 이 금액이죠?",
+    "병의원 어디서 받든 똑같나요?",
+    "본인부담률은 30%인데 보상비율 80%라면서요?",
+    "공단부담률 70%면 본인부담률 30% 맞죠?",
+    "자기부담률 20%인데 왜 이 금액이죠?",
+    "본인부담금 13,500원인데 얼마 나와요?",
 ])
 def test_repeating_known_receipt_values_is_not_a_new_fact(question) -> None:
     from clausegraph.agents.followup import detect_new_facts
@@ -251,6 +267,19 @@ def test_repeating_known_receipt_values_is_not_a_new_fact(question) -> None:
     found = detect_new_facts(question, _receipt_claim())
 
     assert "요양기관 종류" not in found and "본인부담률" not in found
+
+
+def test_institution_named_in_passing_is_not_new_without_a_receipt_value() -> None:
+    # 분쟁 서술에는 "요양병원에 입원했는데"처럼 기관 이름이 지나가듯 나온다. 영수증 값을
+    # 받지 않은 청구의 금액은 이미 상한이라, 낡은 확정액을 설명할 일이 없다.
+    from clausegraph.agents.followup import detect_new_facts
+
+    claim = extract_claim(
+        "C", BENEFIT, ENROLLED, "2026-08-10 급성 기관지염 통원",
+        diagnosis_codes=("J20.9",), claimed_amount=45_000, history=ClaimHistory(),
+    )
+
+    assert "요양기관 종류" not in detect_new_facts("요양병원에 입원했는데 왜 안 되나요?", claim)
 
 
 def test_rate_portion_has_no_float_error() -> None:
