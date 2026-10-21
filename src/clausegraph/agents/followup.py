@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
+from .amount_rules import carved_out_items
 from .extract import parse_amounts
 from .models import Adjudication, Claim, Decision
 from .session import Session
@@ -89,6 +90,12 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
 
     if _DATE_RE.search(question) and not _same_known_date(question, claim):
         found.append("일자")
+
+    # "사실 도수치료 받은 건데요" — 청구에 없던 3대비급여ㆍMRI는 지급 규칙을 바꾼다
+    # (notes/048). 금액 질문으로 읽으면 (1)(2)로 낸 낡은 금액을 설명하게 된다.
+    known_items = carved_out_items(claim.product, claim.treatment)
+    if carved_out_items(claim.product, question).keys() - known_items.keys():
+        found.append("시술")
 
     return tuple(found)
 

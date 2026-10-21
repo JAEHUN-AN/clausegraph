@@ -28,6 +28,7 @@ from mcp.server.mcpserver import MCPServer
 from neo4j import GraphDatabase
 
 from ..access import AccessDeniedError, Principal
+from ..agents.amount_rules import carved_out_items
 from ..agents.coverage import article_scoped_notes, resolve_version
 from ..agents.definition_terms import TermIndex, terms_from_articles
 from ..agents.definition_triage import triage
@@ -761,7 +762,7 @@ def revise_claim(
             now=time.monotonic(), claim=claim, adjudication=result,
         )
     )
-    return f"{_diff(before, result)}\n\n{rendered}"
+    return f"{_diff(before, result)}\n{_held_note(claim)}\n{rendered}"
 
 
 def _revise(
@@ -826,7 +827,7 @@ def _revise(
     # 다시 추출한다. 서술이 새로 오면 서술에서 읽은 값은 새것으로 바꾼다 —
     # 청구인이 고쳐 말한 것이면 옛 값이 남으면 안 된다. 그러나 **서류에서 온
     # 값(stated_*)은 서술에서 오지 않으므로** 서술을 고쳐 말해도 남는다.
-    return extract_claim(
+    revised = extract_claim(
         claim.claim_id,
         claim.product,
         claim.enrolled_on,
@@ -841,6 +842,35 @@ def _revise(
         treated_abroad=abroad,
         institution=venue,
         copay_rate=copay,
+    )
+    return _hold_treatment(claim, revised)
+
+
+def _hold_treatment(before: Claim, after: Claim) -> Claim:
+    """앞 판에 있던 3대비급여ㆍ비급여 MRI 표지를 새 판에 남긴다(notes/048).
+
+    서술에서 읽은 값은 정정을 따르지만 이 표지는 예외다. 사라지면 (1)(2) 산식으로
+    지급액이 나간다 — 도수치료 청구를 "허리 통증 통원"으로 고쳐 말하자 HUMAN_REVIEW가
+    PARTIAL 84,000원이 됐다(반박 검증). 정정이 맞는지는 서술만으로 알 수 없으니,
+    남긴 표지로 규칙을 고르지 않고 사람에게 보낸다. 서류 코드처럼 **서술로 지우는
+    길은 두지 않는다.**
+    """
+    earlier = carved_out_items(before.product, before.treatment)
+    now = carved_out_items(after.product, after.treatment)
+    kept = tuple(word for item, word in earlier.items() if item not in now)
+    if not kept:
+        return after
+    return after.model_copy(update={"held_treatment": (*after.held_treatment, *kept)})
+
+
+def _held_note(claim: Claim) -> str:
+    """재심사 응답에 붙일 말. 남긴 표지가 없으면 빈 문자열."""
+    if not claim.held_treatment:
+        return ""
+    words = ", ".join(f"'{word}'" for word in claim.held_treatment)
+    return (
+        f"앞 서술의 표지 {words} — 새 서술에 없어도 남겼다. 3대비급여ㆍ비급여 MRI 표지는"
+        " 정정만으로 지우지 않는다 — 시술이 바뀐 것이 맞는지는 심사자가 확인할 것.\n"
     )
 
 
