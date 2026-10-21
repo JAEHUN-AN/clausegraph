@@ -155,7 +155,7 @@ def test_benefit_noncovered_through_mcp(monkeypatch) -> None:
     ],
 )
 def test_benefit_rules_are_not_chosen_when_noncovered_is_named(text) -> None:
-    assert carved_out_items(BENEFIT, text) == {NONCOVERED: "비급여"}
+    assert set(carved_out_items(BENEFIT, text)) == {NONCOVERED}
     assert find_rule(BENEFIT, None, ("M54.5",), treatment=text) is None
     # 불확실 면책이 (2)를 가리켜도 마찬가지다.
     assert find_rule(BENEFIT, "(2)질병급여", ("M54.5",), treatment=text) is None
@@ -165,12 +165,50 @@ def test_benefit_rules_are_not_chosen_when_noncovered_is_named(text) -> None:
 
 
 @pytest.mark.parametrize(
+    ("text", "word"),
+    [
+        # 반박 검토 — 폭 없는 문자ㆍ기호 끼움ㆍ한자ㆍ"비보험"이 표지를 빠져나가 800,000원이 나갔다.
+        ("비\u200b급여 도수치료 포함", "비급여"),
+        ("비\ufeff급여 포함", "비급여"),
+        ("비\u00ad급여 포함", "비급여"),
+        ("비\u2060급여 포함", "비급여"),
+        ("비-급여 포함", "비급여"),
+        ("비·급여 포함", "비급여"),
+        ("비ㆍ급여 포함", "비급여"),  # NFKC가 'ㆍ'를 U+119E로 바꾼다
+        ("(비)급여 포함", "비급여"),
+        ("비 급 여 포함", "비급여"),
+        ("비급 여 포함", "비급여"),
+        ("非給與 포함", "非給與"),
+        ("非급여 포함", "非급여"),
+        ("비보험 도수치료 포함", "비보험"),
+        ("(비보험) 진료", "비보험"),
+    ],
+)
+def test_noncovered_spellings_are_read(text, word) -> None:
+    assert carved_out_items(BENEFIT, text) == {NONCOVERED: word}
+    assert find_rule(BENEFIT, None, ("M54.5",), treatment=text) is None
+
+
+def test_the_reason_names_the_spelling_the_claimant_used() -> None:
+    reason = why_no_rule(BENEFIT, ("M54.5",), abroad=None, treatment="비보험 도수치료 포함")
+
+    assert reason.startswith("'비보험' — 제4조의2")
+
+
+def test_format_characters_do_not_hide_the_other_markers() -> None:
+    # 같은 정리를 3대비급여 표지도 거친다 — 특약1 '도(U+200B)수치료'가 (2)로 계산되면 안 된다.
+    assert find_rule(SEVERE, None, ("M54.5",), treatment="도\u200b수치료 통원") is None
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "허리 MRI 촬영",  # 급여 MRI는 급여 의료비다(notes/048)
         "치료비 급여 항목 10만원",  # '치료비'의 비 — '비급여'가 아니다
         "진단비 보험금 청구",
+        "진단비보험금 청구",
         "실비보험으로 청구",
+        "실비 보험으로 청구",
         "급여 진료 통원",
     ],
 )

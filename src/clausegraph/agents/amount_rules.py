@@ -442,10 +442,24 @@ _INJECTION_NOTE = "항암제ㆍ항생제ㆍ희귀의약품 주사면 (1)(2)에�
 # 0.3이면 10만원에 7만원, 입원 100만원이면 80만원(notes/049).
 #
 # 의료행위 이름(도수치료ㆍMRIㆍ주사)으로는 가르지 않는다 — 급여 MRIㆍ급여 주사는 급여
-# 의료비다(notes/048). 청구인이 "비급여"라고 말한 것만 본다. 띄어 쓴 "비 급여"는 '비'가
-# 홀로 섰을 때만 — "치료비 급여 항목"의 '비'는 '치료비'의 것이다. "비보험"은 받지 않는다.
-# 실제 분쟁 문장 160건에서 "비 보험" 4건이 모두 "진단비 보험금"ㆍ"수리비 보험금"이었다.
-_NONCOVERED_RE = re.compile(r"비급여|(?<![가-힣])비\s+급여")
+# 의료비다(notes/048). 청구인이 "비급여"라고 말한 것만 본다.
+#
+# - 붙여 쓴 "비급여"(와 "비급 여")는 어디서나. 기호ㆍ띄어쓰기를 끼운 꼴("비 급여", "비-급여",
+#   "비ㆍ급여", "(비)급여")은 '비'가 홀로 섰을 때만 — "치료비 급여 항목"의 '비'는 '치료비'의 것이다.
+# - "비보험"도 '비'가 홀로 섰을 때만. 실제 분쟁 문장 160건에서 "비 보험" 4건이 모두 "진단비
+#   보험금"ㆍ"수리비 보험금"이었다 — 앞이 한글인 '비'다. "실비보험"도 같은 이유로 거른다.
+# - 한자 "非給與". 폭 없는 문자ㆍBOMㆍ소프트 하이픈은 `_clean`이 먼저 지운다.
+#
+# 처음엔 `비급여|(?<![가-힣])비\s+급여`였다. 반박 검토에서 폭 없는 공백(U+200B)을 끼운
+# "비급여"ㆍ"비-급여"ㆍ"非給與"ㆍ"비보험"이 빠져나가 급여 입원 100만원에 800,000원이 그대로
+# 나갔다(notes/049).
+# "건강보험 적용 안 되는" 같은 풀어 쓴 말은 읽지 않는다.
+_NONCOVERED_SEP = r"[\s\-·ㆍᆞ・‧()\[\]]*"
+_NONCOVERED_RE = re.compile(
+    r"비급\s*여"
+    rf"|(?<![가-힣])비{_NONCOVERED_SEP}(?:급{_NONCOVERED_SEP}여|보험)"
+    r"|非\s*(?:給\s*與|급\s*여)"
+)
 _NONCOVERED_NOTE = (
     "급여 의료비와 함께 청구됐으면 영수증의 급여ㆍ비급여 구분이 필요하다 — 제4조의2 ②"
 )
@@ -485,17 +499,27 @@ _PARTICLE_RE = re.compile(r"(?:으로|에서|에게|까지|부터|를|을|이|�
 
 def noncovered_items(treatment: str) -> dict[str, str]:
     """서술ㆍ시술명에 나온 3대비급여ㆍ비급여 MRI 항목과 '비급여'라는 말, 그렇게 읽은 낱말."""
-    text = unicodedata.normalize("NFKC", treatment)
+    text = _clean(treatment)
     found: dict[str, str] = {}
     for item, pattern in _ITEM_PATTERNS:
         match = pattern.search(text)
         if match:
             found[item] = _word(text, *match.span())
-    # '비급여'는 의료행위가 아니라 구분이다. 둘레 낱말을 붙이지 않는다 — "급여ㆍ비급여"를
-    # 통째로 적으면 사유가 무엇을 가리키는지 흐려진다.
-    if _NONCOVERED_RE.search(text):
-        found[NONCOVERED] = NONCOVERED
+    # '비급여'는 의료행위가 아니라 구분이다. 둘레 낱말을 붙이지 않고("급여ㆍ비급여"를 통째로
+    # 적으면 무엇을 가리키는지 흐려진다) 끼운 기호만 뺀다 — "비-급여"는 '비급여'로 적는다.
+    match = _NONCOVERED_RE.search(text)
+    if match:
+        found[NONCOVERED] = re.sub(_NONCOVERED_SEP, "", match.group(0))
     return found
+
+
+def _clean(text: str) -> str:
+    """NFKC로 모으고 서식 문자(Cf — 폭 없는 공백ㆍBOMㆍ소프트 하이픈 등)를 지운다.
+
+    "도(U+200B)수치료", "비(U+200B)급여"처럼 눈에 안 보이는 문자가 표지를 끊으면 (1)(2)로 계산된다.
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
 
 
 def carved_out_items(product: str, treatment: str) -> dict[str, str]:
