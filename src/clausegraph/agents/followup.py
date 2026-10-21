@@ -31,7 +31,7 @@ import re
 from enum import StrEnum
 
 from .amount_rules import carved_out_items
-from .extract import parse_amounts
+from .extract import INSTITUTIONS, parse_amounts
 from .models import Adjudication, Claim, Decision
 from .session import Session
 
@@ -40,6 +40,16 @@ from .session import Session
 _KCD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)\b")
 _DAYS_RE = re.compile(r"(\d{1,3})\s*일\s*(?:간\s*)?입원")
 _DATE_RE = re.compile(r"(\d{4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})")
+
+# 영수증에서 오는 두 값(notes/045). 고쳐 말하면 통원 공제와 의원급 입원 한도가 바뀐다.
+# 긴 이름을 먼저 본다 — "상급종합병원" 안의 "종합병원", "한의원" 안의 "의원"을 따로 세면
+# 이미 아는 값을 되물은 말이 새 사실이 된다.
+_INSTITUTION_RE = re.compile(
+    "|".join(re.escape(name) for name in sorted(INSTITUTIONS, key=len, reverse=True))
+)
+_COPAY_WORDS = ("본인부담률", "본인부담율", "부담률", "부담율")
+_PERCENT_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s*(?:%|퍼센트|프로)")
+_RATIO_RE = re.compile(r"(?<![\d.,])(0\.\d+|1\.0+)(?![\d.,])")
 
 # 올해 누적을 말하는 표현. 금액과 함께 와야 새 사실로 본다.
 _HISTORY_WORDS = ("이미 받", "기지급", "작년", "올해", "지난번", "전에 받", "누적")
@@ -97,7 +107,34 @@ def detect_new_facts(question: str, claim: Claim) -> tuple[str, ...]:
     if carved_out_items(claim.product, question).keys() - known_items.keys():
         found.append("시술")
 
+    # "사실 상급종합병원이었어요" — 영수증 값이 바뀌면 확정 지급액도 바뀐다. 해외 치료는
+    # 기관 종류를 읽지 않으므로(`extract_claim`) 세지 않는다.
+    if claim.treated_abroad is not True and _institutions_in(question) - {claim.institution}:
+        found.append("요양기관 종류")
+
+    if any(_differs(rate, claim.copay_rate) for rate in _copay_rates_in(question)):
+        found.append("본인부담률")
+
     return tuple(found)
+
+
+def _institutions_in(question: str) -> set[str]:
+    """말에 나온 요양기관 종류를 영수증 파서와 같은 이름으로. "종합 병원"도 읽는다."""
+    squeezed = re.sub(r"\s+", "", question)
+    return {INSTITUTIONS[name] for name in _INSTITUTION_RE.findall(squeezed)}
+
+
+def _copay_rates_in(question: str) -> tuple[float, ...]:
+    """본인부담률을 말할 때만 비율을 읽는다. "60%"만으로는 보상비율과 가르지 못한다."""
+    if not any(word in question for word in _COPAY_WORDS):
+        return ()
+    percents = (float(value) / 100 for value in _PERCENT_RE.findall(question))
+    ratios = (float(value) for value in _RATIO_RE.findall(question))
+    return tuple(rate for rate in (*percents, *ratios) if 0 < rate <= 1)
+
+
+def _differs(rate: float, known: float | None) -> bool:
+    return known is None or abs(rate - known) > 1e-9
 
 
 def _known_amounts(claim: Claim) -> set[int]:

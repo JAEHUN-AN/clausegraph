@@ -164,6 +164,95 @@ def test_overseas_treatment_ignores_the_institution_name() -> None:
     assert claim.institution is None
 
 
+def test_overseas_revision_accepts_the_foreign_hospital_name() -> None:
+    # 처음 심사가 받은 값을 재심사가 거부하면, 영수증 값을 매번 다시 보내는 쪽은 해외 건을
+    # 다시 심사할 수 없다(검토 PR #13 병합 전).
+    from clausegraph.mcp_server.server import _revise
+
+    claim = extract_claim(
+        "C", "기본형 해외여행 실손의료보험", ENROLLED, "해외 통원",
+        diagnosis_codes=("S62.0",), claimed_amount=300_000,
+        treated_abroad=True, institution="Mayo Clinic",
+    )
+
+    revised = _revise(
+        claim, -1, -1, -1, -1, "", claimed_amount=350_000, institution="Mayo Clinic",
+    )
+
+    assert revised.stated_amount == 350_000
+    assert revised.institution is None
+
+
+def test_specialty_care_designation_does_not_lift_the_clinic_cap() -> None:
+    # 특약2 의원급 입원 한도에서 빠지는 것은 종합병원뿐이다. 전문요양기관은 건강보험법의
+    # 지정이지 의료법의 종류가 아니라 병원급일 수 있다 — 한도를 빼고 확정하면 200만원
+    # 과다지급이다. 종합병원인지 모르므로 상한으로 둔다.
+    from clausegraph.agents.amount_rules import RULES
+
+    rule = next(r for r in RULES if r.inpatient_clinic_cap is not None)
+
+    result = compute(
+        10_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), institution="전문요양기관",
+    )
+
+    assert result.is_upper_bound is True
+    assert any("종합병원" in name for name in result.missing)
+    assert "의원급 입원 1회 한도" not in result.basis
+
+
+def test_specialty_care_designation_below_the_cap_needs_nothing_more() -> None:
+    from clausegraph.agents.amount_rules import RULES
+
+    rule = next(r for r in RULES if r.inpatient_clinic_cap is not None)
+
+    result = compute(
+        2_000_000, days_since_enrollment=800, rule=rule, inpatient=True,
+        history=ClaimHistory(), institution="전문요양기관",
+    )
+
+    assert result.is_upper_bound is False
+    assert result.value == int(2_000_000 * rule.inpatient_rate)
+
+
+def _receipt_claim():
+    return extract_claim(
+        "C", BENEFIT, ENROLLED, "2026-08-10 급성 기관지염 통원",
+        diagnosis_codes=("J20.9",), claimed_amount=45_000,
+        institution="의원", copay_rate=0.3, history=ClaimHistory(),
+    )
+
+
+@pytest.mark.parametrize("question,fact", [
+    ("사실 상급종합병원에서 받은 진료예요. 지급액 얼마예요?", "요양기관 종류"),
+    ("종합 병원이었어요. 금액이 왜 이건가요?", "요양기관 종류"),
+    ("본인부담률이 60%였어요. 지급액 얼마죠?", "본인부담률"),
+    ("본인부담률 0.6이에요 얼마 나와요", "본인부담률"),
+])
+def test_corrected_receipt_values_are_new_facts(question, fact) -> None:
+    # 고쳐 말한 영수증 값을 금액 질문으로 읽으면, 앞 판의 더 큰 확정 지급액을 그대로
+    # 설명한다(검토 PR #13 병합 전: 의원·0.3의 31,500원 — 상급종합병원이면 25,000원).
+    from clausegraph.agents.followup import FollowUp, classify, detect_new_facts
+
+    claim = _receipt_claim()
+
+    assert fact in detect_new_facts(question, claim)
+    assert classify(question, claim) is FollowUp.NEW_FACTS
+
+
+@pytest.mark.parametrize("question", [
+    "의원에서 받은 건데 왜 이 금액이죠?",
+    "본인부담률 30%인데 공제가 왜 이렇게 커요?",
+    "본인부담률이 뭐예요?",
+])
+def test_repeating_known_receipt_values_is_not_a_new_fact(question) -> None:
+    from clausegraph.agents.followup import detect_new_facts
+
+    found = detect_new_facts(question, _receipt_claim())
+
+    assert "요양기관 종류" not in found and "본인부담률" not in found
+
+
 def test_rate_portion_has_no_float_error() -> None:
     # 100,000 × 0.29 는 부동소수로 28,999.999… 이다. 공제가 1원 덜 빠지면 1원 과다지급.
     from clausegraph.agents.amount import _portion

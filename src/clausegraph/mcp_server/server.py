@@ -810,7 +810,13 @@ def _revise(
     insured = sum_insured if sum_insured > 0 else claim.sum_insured
     abroad = claim.treated_abroad if treated_abroad is None else treated_abroad
     # 빈 값·기호만 있는 값은 파서가 None을 돌려준다 — "주지 않았다"이므로 앞의 값을 둔다.
-    venue = parse_institution(institution) or claim.institution
+    # 해외 치료면 기관명을 읽지 않는다 — 처음 심사(`extract_claim`)가 받은 "Mayo Clinic"을
+    # 재심사가 거부하면 안 된다.
+    venue = (
+        claim.institution
+        if abroad is True
+        else parse_institution(institution) or claim.institution
+    )
     copay = claim.copay_rate if copay_rate < 0 else parse_copay_rate(copay_rate)
     structured_changed = (
         stated != claim.stated_codes
