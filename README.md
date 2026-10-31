@@ -532,7 +532,7 @@ uv run --extra graph python -m clausegraph.agents.cli         # 심사 데모
 
 | 데이터 | 출처 | 이용조건 |
 |---|---|---|
-| 보험 표준약관 | [국가법령정보 공동활용](https://open.law.go.kr) — 보험업감독업무시행세칙 별표15 | 비상업적 이용, 출처표시 |
+| 보험 표준약관 | [국가법령정보 공동활용](https://open.law.go.kr) — 보험업감독업무시행세칙 별표15 | 공공누리 제1유형(출처표시, 상업적 이용·변경 가능). 출처: 법제처 국가법령정보센터 |
 | 분쟁조정사례 | [금융감독원](https://www.fss.or.kr/fss/job/fncCnflCase/list.do?menuNo=201195) | 출처표시 |
 | KCD 코드표 | [공공데이터포털](https://www.data.go.kr/data/15067467/fileData.do) — 건강보험심사평가원 상병마스터 | 공공저작물 제1유형(출처표시) |
 
